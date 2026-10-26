@@ -1,6 +1,6 @@
 {
   "framework": "nextjs",
   "installCommand": "npm install",
-  "buildCommand": "npm run build -w apps/web",
+  "buildCommand": "npm run build -w packages/core && npm run build -w apps/web",
   "outputDirectory": "apps/web/.next"
 }
