@@ -42,6 +42,30 @@ contract QieOracleAdapterTest is Test {
         adapter.getPriceUsd18(asset);
     }
 
+    function test_revertsWhenFeedDecimalsExceed18() public {
+        MockAggregatorV3 badFeed = new MockAggregatorV3(20, "BAD / USD", 1);
+        adapter.setFeed(asset, address(badFeed));
+        vm.expectRevert(abi.encodeWithSelector(QieOracleAdapter.DecimalsTooLarge.selector, uint8(20)));
+        adapter.getPriceUsd18(asset);
+    }
+
+    function test_feedCanBeRotatedToANewAggregator() public {
+        adapter.setFeed(asset, address(btcFeed));
+        assertEq(adapter.getPriceUsd18(asset), 60_123.45e18);
+
+        MockAggregatorV3 newFeed = new MockAggregatorV3(8, "BTC / USDT v2", 61_000_00000000);
+        adapter.setFeed(asset, address(newFeed));
+        assertEq(adapter.getPriceUsd18(asset), 61_000e18);
+    }
+
+    function test_maxStalenessCanBeDisabledWithZero() public {
+        adapter.setFeed(asset, address(btcFeed));
+        adapter.setMaxStaleness(0);
+        vm.warp(block.timestamp + 365 days);
+        // Staleness check is skipped entirely when maxStaleness == 0.
+        assertEq(adapter.getPriceUsd18(asset), 60_123.45e18);
+    }
+
     function test_onlyOwnerCanSetFeed() public {
         vm.prank(address(0xBAD));
         vm.expectRevert();

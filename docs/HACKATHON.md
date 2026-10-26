@@ -1,5 +1,6 @@
 # QIE Mainnet Hackathon 3.0 submission notes
 
+- **Live demo URL**: https://qie-forge.vercel.app (Next.js frontend, real live on-chain data, public, no login wall).
 - **Event**: QIE Mainnet Hackathon 3.0, hackathon.qie.digital. Submission deadline Nov 30, 2026.
 - **Track**: DeFi & Financial Infrastructure (the AMM + lending vault is a real financial protocol). Developer Infrastructure & Tooling is a secondary angle — the SDK/CLI in `packages/core`/`packages/cli` is genuinely reusable developer tooling, built and verified as part of this project, but is not the submission's headline.
 - **Originality**: clean-room AMM (constant-product, own derivation) + isolated lending vault (own derivation). No existing DEX or lending protocol's source was read or copied while building this — see each contract's NatSpec for where every formula comes from. Built around a real, independently-discovered correction to QIE's own oracle documentation (see README's "Real findings" section) rather than a copy-pasted integration that would have silently failed.

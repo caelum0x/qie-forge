@@ -135,6 +135,78 @@ contract QieForgeVaultTest is Test {
         assertEq(vault.currentDebt(borrower), 600e6);
     }
 
+    function test_liquidation_revertsOnZeroDebt() public {
+        vm.prank(borrower);
+        vault.depositCollateral(1_000e18);
+
+        vm.startPrank(liquidator);
+        borrowToken.approve(address(vault), 1e6);
+        vm.expectRevert(QieForgeVault.NothingToLiquidate.selector);
+        vault.liquidate(borrower, 1e6);
+        vm.stopPrank();
+    }
+
+    function test_repay_exceedingDebt_reverts() public {
+        vm.startPrank(borrower);
+        vault.depositCollateral(1_000e18);
+        vault.borrow(700e6);
+        borrowToken_mintTo(borrower, 1e6); // give borrower enough to even attempt an over-repay
+        vm.expectRevert(QieForgeVault.RepayExceedsDebt.selector);
+        vault.repay(701e6);
+        vm.stopPrank();
+    }
+
+    function borrowToken_mintTo(address to, uint256 amount) internal {
+        borrowToken.mint(to, amount);
+    }
+
+    function test_partialLiquidation_canRestoreHealthAboveOne() public {
+        vm.startPrank(borrower);
+        vault.depositCollateral(1_000e18);
+        vault.borrow(700e6);
+        vm.stopPrank();
+
+        // Mild price drop — unhealthy, but a partial liquidation can fix it.
+        collateralFeed.setAnswer(80_000_000); // $0.80
+        assertLt(vault.healthFactor(borrower), 1e18);
+
+        vm.startPrank(liquidator);
+        borrowToken.approve(address(vault), 400e6);
+        vault.liquidate(borrower, 400e6);
+        vm.stopPrank();
+
+        assertEq(vault.currentDebt(borrower), 300e6);
+        assertGt(vault.healthFactor(borrower), 1e18);
+    }
+
+    function test_sequentialLiquidators_eachGetProportionalBonus() public {
+        address liquidator2 = address(0x1102);
+        borrowToken.mint(liquidator2, 1_000_000e6);
+
+        vm.startPrank(borrower);
+        vault.depositCollateral(1_000e18);
+        vault.borrow(700e6);
+        vm.stopPrank();
+
+        collateralFeed.setAnswer(50_000_000); // $0.50, deeply underwater
+
+        vm.startPrank(liquidator);
+        borrowToken.approve(address(vault), 50e6);
+        vault.liquidate(borrower, 50e6);
+        vm.stopPrank();
+        uint256 firstSeized = collateral.balanceOf(liquidator);
+        assertApproxEqAbs(firstSeized, 105e18, 1e15); // $50 * 1.05 / $0.50
+
+        vm.startPrank(liquidator2);
+        borrowToken.approve(address(vault), 50e6);
+        vault.liquidate(borrower, 50e6);
+        vm.stopPrank();
+        uint256 secondSeized = collateral.balanceOf(liquidator2);
+        assertApproxEqAbs(secondSeized, 105e18, 1e15);
+
+        assertEq(vault.currentDebt(borrower), 600e6);
+    }
+
     function test_liquidation_cannotSeizeMoreThanAvailableCollateral() public {
         vm.startPrank(borrower);
         vault.depositCollateral(100e18); // small collateral

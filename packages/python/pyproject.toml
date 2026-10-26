@@ -1,0 +1,25 @@
+[project]
+name = "qie-forge"
+version = "0.1.0"
+description = "Python SDK for the QIE blockchain — real chain/oracle/explorer clients and AMM/vault read+quote helpers, mirroring @qie-forge/core"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+  "web3>=7.0.0",
+  "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["qie_forge*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

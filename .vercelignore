@@ -1,0 +1,7 @@
+packages/contracts/lib
+packages/contracts/out
+packages/contracts/cache
+packages/contracts/broadcast
+packages/python/.venv
+packages/python/.pytest_cache
+packages/rust/target

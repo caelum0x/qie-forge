@@ -5,7 +5,8 @@
   "description": "QIE Forge — multi-language developer SDK, CLI, and oracle/ecosystem tooling for the QIE blockchain",
   "workspaces": [
     "packages/core",
-    "packages/cli"
+    "packages/cli",
+    "apps/web"
   ],
   "scripts": {
     "build": "npm run build -w packages/core && npm run build -w packages/cli",
