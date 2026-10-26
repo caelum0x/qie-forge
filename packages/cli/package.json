@@ -1,0 +1,24 @@
+{
+  "name": "@qie-forge/cli",
+  "version": "0.1.0",
+  "description": "Command-line tooling for QIE Forge: chain/oracle/explorer inspection built on @qie-forge/core",
+  "type": "module",
+  "bin": {
+    "qie-forge": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@qie-forge/core": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "typescript": "^5.6.0"
+  },
+  "license": "MIT",
+  "files": [
+    "dist"
+  ]
+}

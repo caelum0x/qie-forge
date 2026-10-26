@@ -1,0 +1,20 @@
+{
+  "name": "qie-forge-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "description": "QIE Forge — multi-language developer SDK, CLI, and oracle/ecosystem tooling for the QIE blockchain",
+  "workspaces": [
+    "packages/core",
+    "packages/cli"
+  ],
+  "scripts": {
+    "build": "npm run build -w packages/core && npm run build -w packages/cli",
+    "test": "npm run test -w packages/core",
+    "test:live": "QIE_FORGE_RUN_LIVE_TESTS=1 npm run test -w packages/core",
+    "lint": "npm run lint -w packages/core && npm run lint -w packages/cli"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
