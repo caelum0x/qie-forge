@@ -10,7 +10,7 @@
   ],
   "scripts": {
     "build": "npm run build -w packages/core && npm run build -w packages/cli",
-    "test": "npm run test -w packages/core",
+    "test": "npm run test -w packages/core && npm run test -w packages/cli",
     "test:live": "QIE_FORGE_RUN_LIVE_TESTS=1 npm run test -w packages/core",
     "lint": "npm run lint -w packages/core && npm run lint -w packages/cli"
   },

@@ -8,6 +8,8 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
@@ -15,7 +17,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.7.0",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
   },
   "license": "MIT",
   "files": [

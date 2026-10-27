@@ -210,6 +210,7 @@ async fn vault_position_reads_against_real_deployed_contracts() {
 
 #[tokio::test]
 async fn amm_quote_and_swap_tx_building_against_real_deployed_pools() {
+    let _serialize = TEST_LOCK.lock().unwrap();
     let Some(_anvil) = start_anvil(AMM_TEST_ANVIL_PORT) else {
         eprintln!("skipping: `anvil` (Foundry) is not installed");
         return;

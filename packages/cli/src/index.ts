@@ -9,7 +9,8 @@ import {
 } from "@qie-forge/core";
 import { parseArgs, requireFlag } from "./args.js";
 
-function asNetwork(value: string): QieNetworkName {
+/** Exported so test/index.test.ts can verify validation without spawning the CLI process. */
+export function asNetwork(value: string): QieNetworkName {
   if (value !== "testnet" && value !== "mainnet") {
     throw new Error(`--network must be "testnet" or "mainnet", got "${value}"`);
   }
@@ -85,14 +86,14 @@ async function cmdExplorerLookup(flags: Record<string, string>): Promise<void> {
   console.log(JSON.stringify({ ...info, url: explorer.addressUrl(address) }, null, 2));
 }
 
-const COMMANDS: Record<string, (flags: Record<string, string>) => Promise<void>> = {
+export const COMMANDS: Record<string, (flags: Record<string, string>) => Promise<void>> = {
   "chain-info": cmdChainInfo,
   "oracle-price": cmdOraclePrice,
   balance: cmdBalance,
   "explorer-lookup": cmdExplorerLookup,
 };
 
-function printHelp(): void {
+export function printHelp(): void {
   console.log(`qie-forge <command> [--flags]
 
 Commands:
@@ -103,8 +104,14 @@ Commands:
 `);
 }
 
-async function main(): Promise<void> {
-  const { command, flags } = parseArgs(process.argv.slice(2));
+/**
+ * Exported so test/index.test.ts can exercise command dispatch directly.
+ * Catches handler errors itself (rather than relying on main()'s .catch) so
+ * run() has one consistent exit-code contract whether it's invoked as the
+ * real CLI binary or directly from a test.
+ */
+export async function run(argv: string[]): Promise<void> {
+  const { command, flags } = parseArgs(argv);
   if (!command || command === "help" || command === "--help") {
     printHelp();
     return;
@@ -115,10 +122,15 @@ async function main(): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  await handler(flags);
+  try {
+    await handler(flags);
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : err);
+    process.exitCode = 1;
+  }
 }
 
-main().catch((err) => {
-  console.error(err instanceof Error ? err.message : err);
-  process.exitCode = 1;
-});
+// Only auto-run when executed as the CLI binary, not when imported by tests.
+if (process.env.VITEST === undefined) {
+  run(process.argv.slice(2));
+}

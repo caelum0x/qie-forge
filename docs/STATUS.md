@@ -13,8 +13,8 @@ request — see "Built and verified: frontend" below).
 cd packages/contracts && forge test -vv
 ```
 
-**35/35 tests pass** across 4 suites (`QieOracleAdapter` 8, `QieForgeRouter`
-8, `QieForgeVault` 12, `QieForgePair` 7). Beyond the original 25 (constant-
+**41/41 tests pass** across 4 suites (`QieOracleAdapter` 8, `QieForgeRouter`
+8, `QieForgeVault` 18, `QieForgePair` 7). Beyond the original 25 (constant-
 product invariants, LP math, fee accrual/protocol-fee switch, TWAP,
 slippage/deadline checks, oracle staleness/decimals handling, base
 LTV/health-factor/interest/liquidation), this pass added:
@@ -23,13 +23,20 @@ LTV/health-factor/interest/liquidation), this pass added:
 - **`swapTokensForExactTokens`** (exact-output swaps) — pulls exactly the quoted input, reverts above a max-input cap.
 - **Oracle adapter edge cases**: `DecimalsTooLarge` revert for a >18-decimal feed, feed rotation to a new aggregator, disabling the staleness check with `maxStaleness=0`.
 - **Vault liquidation edge cases**: liquidating a position with zero debt reverts (`NothingToLiquidate`), over-repaying reverts (`RepayExceedsDebt`), a partial liquidation that restores health factor above 1, and two sequential liquidators each receiving their proportional bonus from the same underwater position.
+- **Lender deposit/withdraw share accounting** (`test_deposit_mintsSharesAtExchangeRate`, `test_deposit_lenderSharesAppreciateFromBorrowerInterest`, `test_withdraw_redeemsSharesForUnderlying`, `test_withdraw_revertsWhenLiquidityIsLentOut`, `test_withdraw_belowLtvThreshold_reverts`, `test_withdraw_revertsWhenSharesExceedBalance`, `test_liquidation_cannotSeizeMoreThanAvailableCollateral`, `test_liquidation_minimalRepayStillZeroesDebt_whenCollateralExhausted`) — `QieForgeVault.deposit()`/`withdraw()` exist and are covered; a stale claim that this flow was missing (repeated across a couple of commit messages without re-reading the file) has been corrected below and in this file's own history.
 
 ## Built and verified: TypeScript SDK + CLI (real network calls)
 
-Unchanged from the prior pass — see git history for the full pasted CLI
-output. Summary: `chain-info`/`oracle-price` against real testnet (chain
-1983, block >9.39M) and mainnet (chain 1990, block >11.46M) RPCs, real BTC
+`chain-info`/`oracle-price` against real testnet (chain 1983, block
+>9.39M) and mainnet (chain 1990, block >11.46M) RPCs, real BTC
 ($79,896.25) and QIE ($0.1398) prices via the corrected oracle ABI.
+**24/24 CLI unit tests pass** (`npm run test -w packages/cli`, vitest):
+10 tests for `args.ts` (`parseArgs`/`requireFlag` edge cases) and 14 for
+`index.ts`'s command dispatch (`chain-info`/`oracle-price`/`balance`/
+`explorer-lookup` output formatting, network validation, missing-flag and
+unknown-command error paths, handler-error-to-exitCode propagation),
+run against a mocked `@qie-forge/core` so they're fast and offline —
+closing the "zero test files" gap `packages/cli/test/` previously had.
 
 ## Built and verified: Python SDK (`packages/python`)
 
@@ -107,13 +114,6 @@ reachable with no login — confirmed via a plain `curl` returning HTTP 200).
   `testnet`/`mainnet`) turns the frontend's swap/vault pages from the demo
   deployment into the real thing — no frontend code change needed, same
   mechanism the demo deployment above already proves.
-- **`QieForgeVault` has no lender deposit/withdraw flow.** `borrow()`
-  transfers `borrowAsset` straight out of the vault's own balance — there
-  is no `supply()`/`withdraw()` for lenders to fund it, so the only way
-  TUSD liquidity gets into the vault today is the deployer directly
-  minting/transferring it in (fine for the disposable demo deployment
-  above, a real correctness gap before any real Testnet/Mainnet launch
-  with real user funds — tracked honestly, not hidden).
 - **No real-browser wallet click-through test** for the frontend (needs a
   wallet extension this environment doesn't have).
 - **QUSDC integration is fail-closed everywhere** — the real QUSDC
