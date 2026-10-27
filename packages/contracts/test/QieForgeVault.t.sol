@@ -225,4 +225,143 @@ contract QieForgeVaultTest is Test {
         (uint128 remainingCollateral,,) = vault.positions(borrower);
         assertEq(remainingCollateral, 0);
     }
+
+    function test_liquidation_minimalRepayStillZeroesDebt_whenCollateralExhausted() public {
+        // Reproduces the real vulnerability found 2026-10-27 (KupiaSec report,
+        // independently verified): a liquidator deliberately choosing a tiny
+        // repayAmount while collateral is fully exhausted used to leave
+        // phantom, permanently-unbacked debt on a position with zero
+        // collateral. The fix caps the actual repay down to what the seized
+        // collateral covers and writes off the rest — debt and collateral
+        // must always reach zero together.
+        vm.startPrank(borrower);
+        vault.depositCollateral(100e18);
+        vault.borrow(70e6);
+        vm.stopPrank();
+
+        collateralFeed.setAnswer(1_000_000); // $0.01 — deep crash
+        assertLt(vault.healthFactor(borrower), 1e18);
+
+        vm.startPrank(liquidator);
+        borrowToken.approve(address(vault), 1e6);
+        vault.liquidate(borrower, 1e6); // attacker requests a tiny repay on purpose
+        vm.stopPrank();
+
+        (uint128 remainingCollateral, uint128 remainingDebt,) = vault.positions(borrower);
+        assertEq(remainingCollateral, 0);
+        assertEq(remainingDebt, 0, "debt must be written off, not left phantom with zero collateral");
+        assertEq(vault.currentDebt(borrower), 0);
+    }
+
+    function test_deposit_mintsSharesAtExchangeRate() public {
+        address lender = address(0x1E4DE2);
+        borrowToken.mint(lender, 1_000e6);
+
+        vm.startPrank(lender);
+        borrowToken.approve(address(vault), 1_000e6);
+        uint256 shares = vault.deposit(1_000e6);
+        vm.stopPrank();
+
+        assertEq(shares, 1_000e6); // first depositor mints 1:1
+        assertEq(vault.lenderShares(lender), 1_000e6);
+        assertEq(vault.totalLenderShares(), 1_000e6);
+    }
+
+    function test_withdraw_redeemsSharesForUnderlying() public {
+        // Fresh vault, no donated liquidity — so this lender's shares are
+        // the only claim on totalAssets() and should round-trip exactly.
+        QieForgeVault freshVault = new QieForgeVault(
+            collateral, borrowToken, oracle, LTV_BPS, LIQ_THRESHOLD_BPS, LIQ_BONUS_BPS, RATE_PER_SECOND_18
+        );
+        address lender = address(0x1E4DE2);
+        borrowToken.mint(lender, 1_000e6);
+
+        vm.startPrank(lender);
+        borrowToken.approve(address(freshVault), 1_000e6);
+        uint256 shares = freshVault.deposit(1_000e6);
+        uint256 balBefore = borrowToken.balanceOf(lender);
+        uint256 amount = freshVault.withdraw(shares);
+        vm.stopPrank();
+
+        assertEq(amount, 1_000e6);
+        assertEq(borrowToken.balanceOf(lender) - balBefore, 1_000e6);
+        assertEq(freshVault.lenderShares(lender), 0);
+        assertEq(freshVault.totalLenderShares(), 0);
+    }
+
+    function test_withdraw_revertsWhenSharesExceedBalance() public {
+        QieForgeVault freshVault = new QieForgeVault(
+            collateral, borrowToken, oracle, LTV_BPS, LIQ_THRESHOLD_BPS, LIQ_BONUS_BPS, RATE_PER_SECOND_18
+        );
+        address lender = address(0x1E4DE2);
+        borrowToken.mint(lender, 1_000e6);
+
+        vm.startPrank(lender);
+        borrowToken.approve(address(freshVault), 1_000e6);
+        uint256 shares = freshVault.deposit(1_000e6);
+        vm.expectRevert(QieForgeVault.InsufficientShares.selector);
+        freshVault.withdraw(shares + 1);
+        vm.stopPrank();
+    }
+
+    function test_withdraw_revertsWhenLiquidityIsLentOut() public {
+        // A fresh vault with no pre-funded "donated" liquidity — only
+        // lender-supplied capital — so a borrow() actually drains the idle
+        // balance a lender would try to withdraw against.
+        QieForgeVault freshVault = new QieForgeVault(
+            collateral, borrowToken, oracle, LTV_BPS, LIQ_THRESHOLD_BPS, LIQ_BONUS_BPS, RATE_PER_SECOND_18
+        );
+
+        address lender = address(0x1E4DE2);
+        borrowToken.mint(lender, 1_000e6);
+        vm.startPrank(lender);
+        borrowToken.approve(address(freshVault), 1_000e6);
+        uint256 shares = freshVault.deposit(1_000e6);
+        vm.stopPrank();
+
+        vm.startPrank(borrower);
+        collateral.approve(address(freshVault), type(uint256).max);
+        freshVault.depositCollateral(2_000e18);
+        freshVault.borrow(900e6); // drains all but 100e6 of idle liquidity
+        vm.stopPrank();
+
+        vm.startPrank(lender);
+        vm.expectRevert(QieForgeVault.InsufficientLiquidity.selector);
+        freshVault.withdraw(shares); // needs the full 1,000e6, only 100e6 idle
+        vm.stopPrank();
+    }
+
+    function test_deposit_lenderSharesAppreciateFromBorrowerInterest() public {
+        QieForgeVault freshVault = new QieForgeVault(
+            collateral, borrowToken, oracle, LTV_BPS, LIQ_THRESHOLD_BPS, LIQ_BONUS_BPS, RATE_PER_SECOND_18
+        );
+
+        address lender = address(0x1E4DE2);
+        borrowToken.mint(lender, 1_000e6);
+        vm.startPrank(lender);
+        borrowToken.approve(address(freshVault), 1_000e6);
+        uint256 shares = freshVault.deposit(1_000e6);
+        vm.stopPrank();
+
+        vm.startPrank(borrower);
+        collateral.approve(address(freshVault), type(uint256).max);
+        freshVault.depositCollateral(1_000e18);
+        freshVault.borrow(700e6);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 365 days);
+
+        uint256 owed = freshVault.currentDebt(borrower);
+        assertGt(owed, 700e6); // interest accrued
+
+        vm.startPrank(borrower);
+        borrowToken.mint(borrower, owed);
+        borrowToken.approve(address(freshVault), owed);
+        freshVault.repay(owed); // fully repay, including interest, refilling idle liquidity
+        vm.stopPrank();
+
+        vm.prank(lender);
+        uint256 amount = freshVault.withdraw(shares);
+        assertGt(amount, 1_000e6, "lender's shares must be worth more than their deposit after interest accrued");
+    }
 }

@@ -53,6 +53,18 @@ contract QieForgeVault is ReentrancyGuard {
     uint256 public totalCollateral;
     uint256 public totalDebtPrincipal;
 
+    /// @notice Lender share accounting (ERC4626-style, internal — not a
+    /// transferable ERC-20). Lenders supply `borrowAsset` and receive shares
+    /// of `totalAssets() = idle borrowAsset balance + totalDebtPrincipal`.
+    /// Interest accrued via `_accrue` grows `totalDebtPrincipal`, which
+    /// grows `totalAssets()` for everyone without a cash movement — this is
+    /// also how a liquidation write-off (see `liquidate`) is automatically
+    /// socialized across all lenders: shrinking `totalDebtPrincipal` shrinks
+    /// every share's claim proportionally, with no separate write-off ledger
+    /// needed.
+    mapping(address => uint256) public lenderShares;
+    uint256 public totalLenderShares;
+
     event CollateralDeposited(address indexed user, uint256 amount);
     event CollateralWithdrawn(address indexed user, uint256 amount);
     event Borrowed(address indexed user, uint256 amount);
@@ -60,6 +72,9 @@ contract QieForgeVault is ReentrancyGuard {
     event Liquidated(
         address indexed user, address indexed liquidator, uint256 debtRepaid, uint256 collateralSeized
     );
+    event BadDebtWrittenOff(address indexed user, uint256 amount);
+    event Deposited(address indexed lender, uint256 amount, uint256 shares);
+    event Withdrawn(address indexed lender, uint256 amount, uint256 shares);
 
     error ZeroAmount();
     error InsufficientCollateral();
@@ -67,6 +82,8 @@ contract QieForgeVault is ReentrancyGuard {
     error PositionHealthy();
     error RepayExceedsDebt();
     error NothingToLiquidate();
+    error InsufficientShares();
+    error InsufficientLiquidity();
 
     constructor(
         IERC20 _collateralAsset,
@@ -129,6 +146,49 @@ contract QieForgeVault is ReentrancyGuard {
         if (debtValue == 0) return type(uint256).max;
 
         return (collateralValue * liquidationThresholdBps * WAD) / (debtValue * BPS_DENOMINATOR);
+    }
+
+    // ---------------------------------------------------------------- //
+    // Lender actions
+    // ---------------------------------------------------------------- //
+
+    /// @notice Total value backing all lender shares: the vault's own idle
+    /// `borrowAsset` balance (undeployed liquidity) plus all outstanding
+    /// debt principal (interest-inclusive, per `_accrue`), which is the
+    /// claim the vault still has on borrowers.
+    function totalAssets() public view returns (uint256) {
+        return borrowAsset.balanceOf(address(this)) + totalDebtPrincipal;
+    }
+
+    /// @notice Supply `borrowAsset` liquidity and receive shares priced at
+    /// the current exchange rate. First depositor mints 1:1.
+    function deposit(uint256 amount) external nonReentrant returns (uint256 shares) {
+        if (amount == 0) revert ZeroAmount();
+        uint256 assetsBefore = totalAssets();
+        shares = totalLenderShares == 0 ? amount : (amount * totalLenderShares) / assetsBefore;
+        if (shares == 0) revert ZeroAmount();
+
+        lenderShares[msg.sender] += shares;
+        totalLenderShares += shares;
+        borrowAsset.safeTransferFrom(msg.sender, address(this), amount);
+        emit Deposited(msg.sender, amount, shares);
+    }
+
+    /// @notice Redeem shares for `borrowAsset` at the current exchange rate.
+    /// Reverts if the vault's idle balance can't cover it (liquidity
+    /// currently out on loan isn't withdrawable until repaid).
+    function withdraw(uint256 shares) external nonReentrant returns (uint256 amount) {
+        if (shares == 0) revert ZeroAmount();
+        if (shares > lenderShares[msg.sender]) revert InsufficientShares();
+
+        amount = (shares * totalAssets()) / totalLenderShares;
+        uint256 idle = borrowAsset.balanceOf(address(this));
+        if (amount > idle) revert InsufficientLiquidity();
+
+        lenderShares[msg.sender] -= shares;
+        totalLenderShares -= shares;
+        borrowAsset.safeTransfer(msg.sender, amount);
+        emit Withdrawn(msg.sender, amount, shares);
     }
 
     // ---------------------------------------------------------------- //
@@ -199,6 +259,10 @@ contract QieForgeVault is ReentrancyGuard {
     /// @notice Anyone may liquidate an unhealthy position by repaying up to
     /// its full debt and receiving collateral worth `repayAmount *
     /// (1 + liquidationBonusBps)` in USD terms, at current oracle prices.
+    /// If the position's collateral is fully exhausted by the seizure, the
+    /// repay amount is capped down to what that collateral actually covers
+    /// (at the bonus rate) and any remaining debt is written off — debt and
+    /// collateral always reach zero together, never debt-with-no-collateral.
     function liquidate(address user, uint256 repayAmount) external nonReentrant {
         Position storage pos = positions[user];
         uint256 debt = _accrue(pos);
@@ -212,16 +276,31 @@ contract QieForgeVault is ReentrancyGuard {
         uint256 repayValueUsd = _usdValue(repayAmount, borrowDecimals, borrowPrice18);
         uint256 seizeValueUsd = (repayValueUsd * (BPS_DENOMINATOR + liquidationBonusBps)) / BPS_DENOMINATOR;
         uint256 seizeCollateral = (seizeValueUsd * (10 ** collateralDecimals)) / collateralPrice18;
-        if (seizeCollateral > pos.collateral) seizeCollateral = pos.collateral;
 
-        uint256 newDebt = debt - repayAmount;
+        uint256 badDebt;
+        if (seizeCollateral >= pos.collateral) {
+            // Collateral is the binding constraint. Seize all of it, cap the
+            // actual repay to what that collateral is worth at the bonus
+            // rate (never more than the liquidator offered), and write off
+            // whatever debt remains uncovered instead of leaving it parked
+            // on a position with zero collateral behind it.
+            seizeCollateral = pos.collateral;
+            uint256 seizedValueUsd = _usdValue(seizeCollateral, collateralDecimals, collateralPrice18);
+            uint256 coveredValueUsd = (seizedValueUsd * BPS_DENOMINATOR) / (BPS_DENOMINATOR + liquidationBonusBps);
+            uint256 coveredRepay = (coveredValueUsd * (10 ** borrowDecimals)) / borrowPrice18;
+            if (coveredRepay < repayAmount) repayAmount = coveredRepay;
+            badDebt = debt - repayAmount;
+        }
+
+        uint256 newDebt = debt - repayAmount - badDebt;
         totalDebtPrincipal = totalDebtPrincipal - debt + newDebt;
         pos.debtPrincipal = uint128(newDebt);
         pos.collateral -= uint128(seizeCollateral);
         totalCollateral -= seizeCollateral;
 
-        borrowAsset.safeTransferFrom(msg.sender, address(this), repayAmount);
-        collateralAsset.safeTransfer(msg.sender, seizeCollateral);
+        if (repayAmount > 0) borrowAsset.safeTransferFrom(msg.sender, address(this), repayAmount);
+        if (seizeCollateral > 0) collateralAsset.safeTransfer(msg.sender, seizeCollateral);
+        if (badDebt > 0) emit BadDebtWrittenOff(user, badDebt);
         emit Liquidated(user, msg.sender, repayAmount, seizeCollateral);
     }
 
