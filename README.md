@@ -9,6 +9,13 @@ Hackathon 3.0** (Developer Infrastructure & Tooling periphery, DeFi &
 Financial Infrastructure track for the protocol itself; see
 [`docs/HACKATHON.md`](docs/HACKATHON.md)).
 
+**Judges: start with [`SUBMISSION.md`](SUBMISSION.md)** — the 5-minute
+judge-facing summary (problem, what's built, live demo walkthrough, real
+findings, security fixes, judging-criteria mapping, and the one honest
+open gap). [`docs/DEMO-SCRIPT.md`](docs/DEMO-SCRIPT.md) is the demo-video
+walkthrough script and [`docs/TEAM-PRESENTATION.md`](docs/TEAM-PRESENTATION.md)
+is the team presentation.
+
 QIE Forge also ships a typed TypeScript SDK (`@qie-forge/core`) and a small
 CLI (`@qie-forge/cli`) used to build, deploy, and operate the protocol — and,
 along the way, to independently verify several things about QIE's own public
@@ -25,7 +32,7 @@ packages/
   core/        @qie-forge/core — TypeScript SDK (viem-based RPC/oracle/explorer client)
   cli/         @qie-forge/cli  — CLI built on @qie-forge/core
   python/      qie_forge       — Python SDK (web3.py), 23/23 tests incl. a real anvil deployment
-  rust/        qie-forge       — Rust SDK (ethers-rs), 13/13 tests
+  rust/        qie-forge       — Rust SDK (ethers-rs), 15/15 tests
 apps/
   web/         Next.js frontend — live at https://qie-forge.vercel.app
 ```
@@ -50,11 +57,12 @@ forge build
 forge test -vv
 ```
 
-35/35 tests pass locally against Foundry's EVM (deterministic, no network
+41/41 tests pass locally against Foundry's EVM (deterministic, no network
 dependency), including 3-pool multi-hop routing, exact-output swaps, oracle
-staleness/decimals/rotation edge cases, and liquidation edge cases
-(zero-debt, over-repay, partial liquidation, sequential liquidators) — see
-[STATUS.md](docs/STATUS.md) for the actual `forge test` output.
+staleness/decimals/rotation edge cases, liquidation edge cases (zero-debt,
+over-repay, partial liquidation, sequential liquidators), and lender
+deposit/withdraw share accounting — see [STATUS.md](docs/STATUS.md) for the
+actual `forge test` output.
 
 ## The SDK + CLI (`packages/core`, `packages/cli`)
 
@@ -93,15 +101,16 @@ QIE_FORGE_RUN_LIVE_TESTS=1 pytest -q   # + 8 live against real testnet/mainnet
 
 # Rust
 cd packages/rust
-cargo test                                               # 9 offline-safe
+cargo test                                               # 9 offline-safe + 2 anvil-deployment integration tests
 QIE_FORGE_RUN_LIVE_TESTS=1 cargo test --test live_chain  # + 4 live against real testnet/mainnet
 ```
 
-The Python SDK's `tests/test_anvil_integration.py` deploys the actual
-compiled `packages/contracts` bytecode to a local anvil devnet and proves
-`VaultClient`/`amm.py` read/quote real on-chain state correctly — not a
-mock. See [docs/STATUS.md](docs/STATUS.md) for the full breakdown and the
-one honest gap (no Rust equivalent of that anvil test yet).
+Both the Python (`tests/test_anvil_integration.py`) and Rust
+(`tests/anvil_integration.rs`) SDKs deploy the actual compiled
+`packages/contracts` bytecode to a local anvil devnet and prove their
+`VaultClient`/`amm` read/quote logic matches real on-chain state exactly —
+not a mock. 23/23 Python tests and 15/15 Rust tests pass. See
+[docs/STATUS.md](docs/STATUS.md) for the full breakdown.
 
 ## The frontend (`apps/web`)
 
@@ -155,20 +164,25 @@ made while building this repo, not from re-reading docs harder.
 
 ## Status (honest, see [docs/STATUS.md](docs/STATUS.md) for the full breakdown)
 
+See [SUBMISSION.md](SUBMISSION.md) for the judge-facing 5-minute summary of
+everything below, including the judging-criteria mapping and the one
+real open gap.
+
 - **Live and public**: https://qie-forge.vercel.app, serving real on-chain
-  data on every request.
+  data on every request, including a real self-hosted demo deployment behind
+  `/swap` and `/vault`.
 - **Built and verified live**: TypeScript, Python, and Rust SDKs + the CLI,
   all against real testnet/mainnet RPCs and the real oracle contracts.
 - **Built and verified locally**: the full AMM + lending vault contract
-  suite (35/35 Foundry tests); the Python SDK's read/quote logic against a
-  real local deployment of the actual contract bytecode (anvil); the
-  frontend's quote API against that same real local deployment.
-- **Not yet done**: an actual on-chain Testnet/Mainnet deployment of the
+  suite (41/41 Foundry tests); both the Python and Rust SDKs' read/quote
+  logic against a real local deployment of the actual contract bytecode
+  (anvil); the frontend's quote/vault-position APIs against that same real
+  deployment, now also publicly reachable (see SUBMISSION.md).
+- **Not yet done**: an actual on-chain QIE Testnet/Mainnet deployment of the
   protocol contracts — blocked on a funded deployer wallet (QIE's testnet
-  faucet is a connect-a-wallet flow, not a plain API, so claiming testnet
-  QIE for a deployer key is a real owner/operator step); a Rust equivalent
-  of the Python SDK's anvil-deployment test; a real-browser wallet
-  click-through test for the frontend.
+  faucet is a connect-a-wallet flow, not a plain API, so claiming testnet or
+  mainnet QIE for a deployer key is a real owner/operator step); a
+  real-browser wallet click-through test for the frontend.
 
 ## License
 

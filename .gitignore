@@ -22,3 +22,4 @@ packages/contracts/out/
 packages/contracts/cache/
 packages/contracts/broadcast/*/31337/
 .vercel
+.gstack/
