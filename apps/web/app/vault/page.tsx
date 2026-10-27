@@ -1,6 +1,7 @@
-import { getVaultAddress } from "@/lib/config";
+import { getVaultAddress, getNetworkName } from "@/lib/config";
 import { VaultCard } from "@/components/VaultCard";
 import { AlertIcon } from "@/components/icons";
+import { DemoBanner } from "@/components/DemoBanner";
 
 export default function VaultPage() {
   const vaultAddress = getVaultAddress();
@@ -12,6 +13,7 @@ export default function VaultPage() {
   return (
     <div className="mx-auto max-w-5xl px-6 py-16">
       <h1 className="text-2xl font-semibold text-foreground mb-6">Lending Vault</h1>
+      {getNetworkName() === "demo" && <DemoBanner />}
 
       {vaultAddress && collateralAddress ? (
         <VaultCard

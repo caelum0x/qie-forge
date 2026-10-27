@@ -12,7 +12,9 @@ import { resolveNetwork, type QieNetworkName } from "@qie-forge/core";
 
 export function getNetworkName(): QieNetworkName {
   const value = process.env.NEXT_PUBLIC_QIE_FORGE_NETWORK;
-  return value === "mainnet" ? "mainnet" : "testnet";
+  if (value === "mainnet") return "mainnet";
+  if (value === "demo") return "demo";
+  return "testnet";
 }
 
 export function getNetworkConfig() {

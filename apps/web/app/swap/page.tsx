@@ -1,6 +1,7 @@
-import { getRouterAddress, getSwapTokens } from "@/lib/config";
+import { getRouterAddress, getSwapTokens, getNetworkName } from "@/lib/config";
 import { SwapCard } from "@/components/SwapCard";
 import { AlertIcon } from "@/components/icons";
+import { DemoBanner } from "@/components/DemoBanner";
 
 export default function SwapPage() {
   const routerAddress = getRouterAddress();
@@ -9,6 +10,7 @@ export default function SwapPage() {
   return (
     <div className="mx-auto max-w-5xl px-6 py-16">
       <h1 className="text-2xl font-semibold text-foreground mb-6">Swap</h1>
+      {getNetworkName() === "demo" && <DemoBanner />}
 
       {routerAddress && tokens.length >= 2 ? (
         <SwapCard tokens={tokens} routerAddress={routerAddress} />

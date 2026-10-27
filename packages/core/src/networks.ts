@@ -1,6 +1,6 @@
 import { QieForgeError } from "./errors.js";
 
-export type QieNetworkName = "testnet" | "mainnet";
+export type QieNetworkName = "testnet" | "mainnet" | "demo";
 
 export interface QieNetworkConfig {
   readonly name: QieNetworkName;
@@ -50,6 +50,24 @@ const NETWORKS: Record<QieNetworkName, QieNetworkConfig> = {
     explorerApiUrl: "https://mainnet.qie.digital/api",
     nativeCurrencySymbol: "QIE",
   },
+  /**
+   * NOT QIE Testnet or Mainnet. A disposable local-anvil devnet
+   * (self-hosted, see packages/contracts/script/DeployDemo.s.sol) that
+   * mirrors the real QIE Forge protocol so /swap and /vault never have to
+   * show an empty state while the actual deployment waits on a funded QIE
+   * deployer key (docs/STATUS.md). All tokens, prices, and liquidity here
+   * are mock/demo data with zero real value. The frontend always labels
+   * this clearly — see components/DemoBanner.tsx — so it is never
+   * mistaken for live mainnet/testnet activity.
+   */
+  demo: {
+    name: "demo",
+    chainId: 31337,
+    rpcUrl: "http://127.0.0.1:8545",
+    explorerUrl: "",
+    explorerApiUrl: "",
+    nativeCurrencySymbol: "ETH",
+  },
 };
 
 export interface ResolveNetworkOptions {
@@ -82,7 +100,9 @@ export function resolveNetwork(
   const envVar =
     name === "testnet"
       ? process.env.QIE_FORGE_TESTNET_RPC_URL
-      : process.env.QIE_FORGE_MAINNET_RPC_URL;
+      : name === "mainnet"
+        ? process.env.QIE_FORGE_MAINNET_RPC_URL
+        : process.env.QIE_FORGE_DEMO_RPC_URL;
 
   const rpcUrl = options.rpcUrl ?? envVar ?? base.rpcUrl;
 

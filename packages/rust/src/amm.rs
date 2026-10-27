@@ -3,12 +3,121 @@
 //! 30bps fee, same formulas), so a Rust caller gets the identical quote a
 //! real QieForgeRouter.getAmountsOut/getAmountsIn call would return.
 
-use ethers::types::U256;
+use std::str::FromStr;
+use std::sync::Arc;
 
+use ethers::prelude::*;
+
+use crate::chain::ChainClient;
 use crate::errors::QieForgeError;
 
 pub const FEE_BPS: u64 = 30;
 pub const BPS_DENOMINATOR: u64 = 10_000;
+
+abigen!(
+    IQieForgeFactory,
+    r#"[
+        function getPair(address tokenA, address tokenB) external view returns (address pair)
+    ]"#
+);
+
+abigen!(
+    IQieForgePair,
+    r#"[
+        function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)
+        function token0() external view returns (address)
+    ]"#
+);
+
+abigen!(
+    IQieForgeRouter,
+    r#"[
+        function swapExactTokensForTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline) external returns (uint256[] amounts)
+        function getAmountsOut(uint256 amountIn, address[] path) external view returns (uint256[] amounts)
+    ]"#
+);
+
+/// Reads the on-chain reserves for a `tokenA`/`tokenB` pair through the
+/// factory — mirrors packages/python/qie_forge/amm.py's `get_reserves`.
+pub async fn get_reserves(
+    chain: &ChainClient,
+    factory_address: Address,
+    token_a: Address,
+    token_b: Address,
+) -> Result<(U256, U256), QieForgeError> {
+    let factory = IQieForgeFactory::new(factory_address, Arc::new(chain.provider().clone()));
+    let pair_address = factory
+        .get_pair(token_a, token_b)
+        .call()
+        .await
+        .map_err(|e| QieForgeError::InvalidResponse(e.to_string()))?;
+    if pair_address == Address::zero() {
+        return Err(QieForgeError::InvalidResponse(format!(
+            "No pair deployed for {token_a:#x}/{token_b:#x} on {factory_address:#x}"
+        )));
+    }
+
+    let pair = IQieForgePair::new(pair_address, Arc::new(chain.provider().clone()));
+    let (reserve0, reserve1, _ts) =
+        pair.get_reserves().call().await.map_err(|e| QieForgeError::InvalidResponse(e.to_string()))?;
+    let token0 = pair.token_0().call().await.map_err(|e| QieForgeError::InvalidResponse(e.to_string()))?;
+
+    Ok(if token_a == token0 {
+        (U256::from(reserve0), U256::from(reserve1))
+    } else {
+        (U256::from(reserve1), U256::from(reserve0))
+    })
+}
+
+/// Walks a multi-hop `path`, reading real on-chain reserves at each hop and
+/// applying the same pure quote math as `get_amount_out` — mirrors
+/// packages/python/qie_forge/amm.py's `get_amounts_out`. A Rust caller gets
+/// the identical quote a real `QieForgeRouter.getAmountsOut()` call would
+/// return, without needing a round-trip through the router contract itself.
+pub async fn get_amounts_out_onchain(
+    chain: &ChainClient,
+    factory_address: Address,
+    amount_in: U256,
+    path: &[Address],
+) -> Result<Vec<U256>, QieForgeError> {
+    if path.len() < 2 {
+        return Err(QieForgeError::InvalidResponse("path must have at least 2 tokens".into()));
+    }
+    let mut amounts = vec![amount_in];
+    for i in 0..path.len() - 1 {
+        let (reserve_in, reserve_out) = get_reserves(chain, factory_address, path[i], path[i + 1]).await?;
+        let next = get_amount_out(*amounts.last().unwrap(), reserve_in, reserve_out)?;
+        amounts.push(next);
+    }
+    Ok(amounts)
+}
+
+/// Builds an UNSIGNED `swapExactTokensForTokens` transaction against a real
+/// deployed router — mirrors
+/// packages/python/qie_forge/amm.py's `build_swap_exact_tokens_for_tokens_tx`.
+/// Never signs or broadcasts; the caller (or a real wallet) is responsible
+/// for that.
+#[allow(clippy::too_many_arguments)] // mirrors the Python SDK's identical 8-argument signature
+pub fn build_swap_exact_tokens_for_tokens_tx(
+    chain: &ChainClient,
+    router_address: Address,
+    amount_in: U256,
+    amount_out_min: U256,
+    path: Vec<Address>,
+    to: Address,
+    deadline: U256,
+    from_address: Address,
+) -> ethers::types::transaction::eip2718::TypedTransaction {
+    let router = IQieForgeRouter::new(router_address, Arc::new(chain.provider().clone()));
+    router
+        .swap_exact_tokens_for_tokens(amount_in, amount_out_min, path, to, deadline)
+        .from(from_address)
+        .tx
+}
+
+pub fn parse_address(address: &str) -> Result<Address, QieForgeError> {
+    Address::from_str(address).map_err(|_| QieForgeError::InvalidAddress(address.to_string()))
+}
 
 pub fn get_amount_out(amount_in: U256, reserve_in: U256, reserve_out: U256) -> Result<U256, QieForgeError> {
     if amount_in.is_zero() {
