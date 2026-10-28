@@ -80,7 +80,7 @@ documented honestly either way, not just when we found something.
 
 ## Technical highlight 3 — verified, not just tested
 
-- **41/41 Foundry tests** across the full contract suite.
+- **43/43 Foundry tests** across the full contract suite.
 - **33/33 TypeScript, 23/23 Python, 15/15 Rust tests**, each SDK built
   independently (not a thin wrapper around the others).
 - **Real anvil-deployment integration tests** in both the Python and Rust
@@ -99,7 +99,7 @@ documented honestly either way, not just when we found something.
 | Criterion | Weight | QIE Forge |
 |---|---|---|
 | Innovation | 30% | Clean-room AMM + lending vault, built around an independently-discovered oracle-docs bug most entrants would copy blindly. |
-| Technical Quality | 25% | 41/41 contract tests, 3 independent SDKs with real anvil-integration tests, one real security bug found and fixed pre-deployment with a reproducing regression test. |
+| Technical Quality | 25% | 43/43 contract tests, 3 independent SDKs with real anvil-integration tests, two real security bugs (liquidation bad-debt, lender-share donation/inflation attack) found and fixed pre-deployment, each with a reproducing regression test. |
 | User Experience | 15% | Live public frontend, real swap/vault flows working end-to-end, no login wall. |
 | Mainnet Integration | 15% | Oracle/RPC/explorer integration is real and QIE-Mainnet-verified today; the protocol's own contract deployment to QIE Mainnet is the one open gap (see below). |
 | Business Potential | 15% | A DEX + money market is the load-bearing DeFi primitive QIE doesn't have yet; swap/LP/borrow usage is exactly the recurring activity the hackathon's traction milestones reward. |

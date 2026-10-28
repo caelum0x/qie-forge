@@ -57,7 +57,7 @@ forge build
 forge test -vv
 ```
 
-41/41 tests pass locally against Foundry's EVM (deterministic, no network
+43/43 tests pass locally against Foundry's EVM (deterministic, no network
 dependency), including 3-pool multi-hop routing, exact-output swaps, oracle
 staleness/decimals/rotation edge cases, liquidation edge cases (zero-debt,
 over-repay, partial liquidation, sequential liquidators), and lender
@@ -174,7 +174,7 @@ real open gap.
 - **Built and verified live**: TypeScript, Python, and Rust SDKs + the CLI,
   all against real testnet/mainnet RPCs and the real oracle contracts.
 - **Built and verified locally**: the full AMM + lending vault contract
-  suite (41/41 Foundry tests); both the Python and Rust SDKs' read/quote
+  suite (43/43 Foundry tests); both the Python and Rust SDKs' read/quote
   logic against a real local deployment of the actual contract bytecode
   (anvil); the frontend's quote/vault-position APIs against that same real
   deployment, now also publicly reachable (see SUBMISSION.md).

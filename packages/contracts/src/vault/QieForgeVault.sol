@@ -49,6 +49,25 @@ contract QieForgeVault is ReentrancyGuard {
     uint256 private constant BPS_DENOMINATOR = 10_000;
     uint256 private constant WAD = 1e18;
 
+    /// @notice Lender shares locked forever on the first-ever deposit() call
+    /// made into a vault that already has nonzero totalAssets() (idle
+    /// balance and/or outstanding debt) at that moment -- same defense-in-
+    /// depth idea as QieForgePair.MINIMUM_LIQUIDITY, applied to this
+    /// contract's internal share accounting instead of a real ERC-20.
+    /// Without this, a vault whose borrowAsset balance was ever inflated
+    /// ahead of totalLenderShares existing at all -- e.g. ops-seeded
+    /// launch liquidity sent via a plain transfer instead of deposit()
+    /// (the exact pattern this repo's own DeployDemo.s.sol used before
+    /// deposit() existed), or any plain donation to the contract address
+    /// while totalLenderShares is at zero -- lets the very next depositor
+    /// mint shares against `amount` alone and then immediately withdraw()
+    /// far more than they put in, draining that pre-existing balance.
+    /// Verified exploitable against this repo's own pre-fix bytecode on
+    /// 2026-10-28: see QieForgeVaultTest.test_deposit_firstDepositor_
+    /// cannotDrainPreFundedLiquidity for the reproduction and the deployed
+    /// self-hosted demo for the real-world trigger (plans/qie-hackathon.md).
+    uint256 public constant MINIMUM_LENDER_SHARES = 1000;
+
     mapping(address => Position) public positions;
     uint256 public totalCollateral;
     uint256 public totalDebtPrincipal;
@@ -161,12 +180,39 @@ contract QieForgeVault is ReentrancyGuard {
     }
 
     /// @notice Supply `borrowAsset` liquidity and receive shares priced at
-    /// the current exchange rate. First depositor mints 1:1.
+    /// the current exchange rate. First depositor mints 1:1 against a
+    /// pristine vault; see the `MINIMUM_LENDER_SHARES` doc comment for the
+    /// pre-funded-vault case.
     function deposit(uint256 amount) external nonReentrant returns (uint256 shares) {
         if (amount == 0) revert ZeroAmount();
         uint256 assetsBefore = totalAssets();
-        shares = totalLenderShares == 0 ? amount : (amount * totalLenderShares) / assetsBefore;
-        if (shares == 0) revert ZeroAmount();
+
+        if (totalLenderShares == 0 && assetsBefore == 0) {
+            // Genuinely pristine vault: no pre-existing value to wall off,
+            // mint 1:1 as before this fix.
+            shares = amount;
+            if (shares == 0) revert ZeroAmount();
+        } else if (totalLenderShares == 0) {
+            // Pre-funded vault (e.g. ops-seeded launch liquidity deposited
+            // via a direct transfer instead of this function, or any
+            // leftover `totalDebtPrincipal` from a vault whose shares all
+            // happened to be withdrawn back to zero): wall off
+            // `assetsBefore` behind a permanently locked
+            // MINIMUM_LENDER_SHARES floor instead of letting this
+            // depositor's shares claim it for free. Solving
+            // `shares / MINIMUM_LENDER_SHARES == amount / assetsBefore`
+            // for `shares` makes both this depositor's shares worth
+            // exactly `amount` and the locked floor worth exactly
+            // `assetsBefore` immediately after this call -- see
+            // MINIMUM_LENDER_SHARES's own doc comment for why this floor
+            // exists at all.
+            shares = (amount * MINIMUM_LENDER_SHARES) / assetsBefore;
+            if (shares == 0) revert ZeroAmount();
+            totalLenderShares = MINIMUM_LENDER_SHARES;
+        } else {
+            shares = (amount * totalLenderShares) / assetsBefore;
+            if (shares == 0) revert ZeroAmount();
+        }
 
         lenderShares[msg.sender] += shares;
         totalLenderShares += shares;

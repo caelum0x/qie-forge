@@ -35,6 +35,26 @@ export function getVaultAddress(): `0x${string}` | undefined {
   return (process.env.NEXT_PUBLIC_QIE_FORGE_VAULT_ADDRESS as `0x${string}` | undefined) || undefined;
 }
 
+export function getVaultCollateralSymbol(): string {
+  return process.env.NEXT_PUBLIC_QIE_FORGE_VAULT_COLLATERAL_SYMBOL || "Collateral";
+}
+
+/** The vault's borrow/quote asset — distinct from the collateral asset
+ * above. Undefined (fail-closed, same posture as every other address in
+ * this file) until a real deployment sets it; the borrow/repay UI in
+ * VaultCard and the whole LendCard stay disabled without it. */
+export function getVaultBorrowAddress(): `0x${string}` | undefined {
+  return (process.env.NEXT_PUBLIC_QIE_FORGE_VAULT_BORROW_ADDRESS as `0x${string}` | undefined) || undefined;
+}
+
+export function getVaultBorrowDecimals(): number {
+  return Number(process.env.NEXT_PUBLIC_QIE_FORGE_VAULT_BORROW_DECIMALS ?? 18);
+}
+
+export function getVaultBorrowSymbol(): string {
+  return process.env.NEXT_PUBLIC_QIE_FORGE_VAULT_BORROW_SYMBOL || "the quote asset";
+}
+
 /** Comma-separated `SYMBOL:address:decimals` list, e.g. "WQIE:0xabc...:18,TUSD:0xdef...:6". */
 export function getSwapTokens(): { symbol: string; address: `0x${string}`; decimals: number }[] {
   const raw = process.env.NEXT_PUBLIC_QIE_FORGE_SWAP_TOKENS;

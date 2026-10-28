@@ -66,7 +66,17 @@ contract DeployDemo is Script {
         );
 
         // --- Oracle + Vault (WQIE collateral, TUSD borrow) ---
-        oracle = new QieOracleAdapter(deployer, 3600);
+        // maxStaleness is deliberately ~10 years, not a realistic
+        // production value: a real QIE Mainnet oracle keeps updating on
+        // its own, but this demo's MockAggregatorV3 only ever gets the one
+        // `updatedAt` timestamp set at deploy time and nothing refreshes it
+        // afterward -- a 1-hour window (the original value here) made
+        // `borrow()`/`healthFactor()` revert with StalePrice for every real
+        // user roughly an hour after each deploy, which is exactly what
+        // happened to the live demo twice on 2026-10-28 (see
+        // plans/qie-hackathon.md). Not a security loosening: this is a
+        // disposable chain with zero real value behind its prices.
+        oracle = new QieOracleAdapter(deployer, 315_360_000);
         MockAggregatorV3 wqieFeed = new MockAggregatorV3(8, "WQIE / USD (Demo)", 14_000_000); // $0.14, 8 decimals
         MockAggregatorV3 tusdFeed = new MockAggregatorV3(8, "TUSD / USD (Demo)", 100_000_000); // $1.00, 8 decimals
         oracle.setFeed(address(wqie), address(wqieFeed));
@@ -74,10 +84,14 @@ contract DeployDemo is Script {
 
         vault = new QieForgeVault(wqie, tusd, oracle, 7_500, 8_000, 500, 0);
 
-        // Seed the vault with borrowable TUSD liquidity (see
-        // docs/qie-hackathon known gap: no lender-deposit flow yet, so a
-        // demo/ops wallet funds the vault directly — tracked honestly as a
-        // real pre-launch gap, not hidden).
+        // Seed the vault with borrowable TUSD liquidity via a direct mint
+        // rather than deposit(): this is deliberately a one-way ops/demo
+        // contribution, not a lender position expecting to be withdrawn
+        // back out later. QieForgeVault.MINIMUM_LENDER_SHARES (added
+        // 2026-10-28 after a real exploit was found against this exact
+        // seeding pattern, see plans/qie-hackathon.md) now walls this
+        // pre-funded balance off from whoever calls deposit() first, so
+        // this shortcut is safe to keep using for demo purposes.
         tusd.mint(address(vault), VAULT_BORROW_LIQUIDITY);
 
         // Open one real demo position so /vault never shows "no position".

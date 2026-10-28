@@ -254,6 +254,13 @@ contract QieForgeVaultTest is Test {
     }
 
     function test_deposit_mintsSharesAtExchangeRate() public {
+        // `vault` (from setUp) was pre-funded with 1_000_000e6 TUSD via a
+        // direct mint, not deposit() -- same "ops-seeded liquidity" shape
+        // as DeployDemo.s.sol -- so the first-ever deposit() call here must
+        // take the MINIMUM_LENDER_SHARES-floor branch, not a naive 1:1
+        // mint. See test_deposit_firstDepositor_cannotDrainPreFundedLiquidity
+        // for why that distinction is a real security property, not just
+        // an implementation detail.
         address lender = address(0x1E4DE2);
         borrowToken.mint(lender, 1_000e6);
 
@@ -262,9 +269,75 @@ contract QieForgeVaultTest is Test {
         uint256 shares = vault.deposit(1_000e6);
         vm.stopPrank();
 
-        assertEq(shares, 1_000e6); // first depositor mints 1:1
-        assertEq(vault.lenderShares(lender), 1_000e6);
-        assertEq(vault.totalLenderShares(), 1_000e6);
+        // amount(1_000e6) : assetsBefore(1_000_000e6) == shares : MINIMUM_LENDER_SHARES(1000)
+        // => shares == 1, and MINIMUM_LENDER_SHARES is locked to nobody.
+        assertEq(shares, 1);
+        assertEq(vault.lenderShares(lender), 1);
+        assertEq(vault.totalLenderShares(), vault.MINIMUM_LENDER_SHARES() + 1);
+
+        // Fairness check: that 1 share must still be worth exactly what the
+        // lender put in, not inflated and not diluted.
+        uint256 value = (vault.lenderShares(lender) * vault.totalAssets()) / vault.totalLenderShares();
+        assertEq(value, 1_000e6);
+    }
+
+    function test_deposit_freshVault_firstDepositorStillMints1to1() public {
+        // A genuinely pristine vault (assetsBefore == 0, same as before this
+        // fix) must keep minting 1:1 -- the MINIMUM_LENDER_SHARES floor
+        // only matters once there is pre-existing value to wall off.
+        QieForgeVault freshVault = new QieForgeVault(
+            collateral, borrowToken, oracle, LTV_BPS, LIQ_THRESHOLD_BPS, LIQ_BONUS_BPS, RATE_PER_SECOND_18
+        );
+        address lender = address(0x1E4DE2);
+        borrowToken.mint(lender, 1_000e6);
+
+        vm.startPrank(lender);
+        borrowToken.approve(address(freshVault), 1_000e6);
+        uint256 shares = freshVault.deposit(1_000e6);
+        vm.stopPrank();
+
+        assertEq(shares, 1_000e6);
+        assertEq(freshVault.totalLenderShares(), 1_000e6);
+    }
+
+    /// @notice Reproduces the real exploit found 2026-10-28 against this
+    /// repo's own pre-fix bytecode (self-hosted QIE Forge demo deployment,
+    /// see plans/qie-hackathon.md): a vault pre-funded with idle liquidity
+    /// before anyone ever calls deposit() let the FIRST depositor mint
+    /// shares against their own `amount` alone, ignoring the pre-existing
+    /// balance entirely -- so they could deposit a small amount and
+    /// immediately withdraw() nearly the ENTIRE pre-funded balance. Asserts
+    /// the fix: the depositor can never redeem meaningfully more than what
+    /// they actually put in, and the pre-funded balance survives.
+    function test_deposit_firstDepositor_cannotDrainPreFundedLiquidity() public {
+        // `vault` was pre-funded with 1_000_000e6 TUSD directly in setUp,
+        // and nobody has called deposit() on it yet in this test.
+        assertEq(vault.totalLenderShares(), 0);
+        uint256 preFundedBalance = borrowToken.balanceOf(address(vault));
+        assertEq(preFundedBalance, 1_000_000e6);
+
+        address attacker = address(0xBAD1E4DE2);
+        borrowToken.mint(attacker, 1_000e6);
+
+        vm.startPrank(attacker);
+        borrowToken.approve(address(vault), 1_000e6);
+        uint256 shares = vault.deposit(1_000e6);
+
+        uint256 balBefore = borrowToken.balanceOf(attacker);
+        uint256 redeemed = vault.withdraw(shares);
+        vm.stopPrank();
+
+        // Pre-fix this would have returned ~1_000_000e6 (the whole
+        // pre-funded balance) for a 1_000e6 deposit. Post-fix it must be
+        // bounded to roughly what the attacker actually deposited (allow a
+        // small rounding slack, never an order-of-magnitude windfall).
+        assertEq(redeemed, borrowToken.balanceOf(attacker) - balBefore);
+        assertLe(redeemed, 1_000e6 + 1, "first depositor must not be able to redeem more than they deposited");
+        assertGe(
+            borrowToken.balanceOf(address(vault)),
+            preFundedBalance - 1,
+            "pre-funded liquidity must survive an attacker's deposit+withdraw round trip"
+        );
     }
 
     function test_withdraw_redeemsSharesForUnderlying() public {

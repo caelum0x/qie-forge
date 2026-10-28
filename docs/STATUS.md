@@ -1,4 +1,4 @@
-# QIE Forge — build status (updated 2026-10-27)
+# QIE Forge — build status (updated 2026-10-28)
 
 Honest status. Nothing below is aspirational — every claim has a command
 you can re-run, and most have a live URL you can open right now.
@@ -7,14 +7,109 @@ you can re-run, and most have a live URL you can open right now.
 live testnet/mainnet block numbers and real QIE Oracle prices on every
 request — see "Built and verified: frontend" below).
 
+## 2026-10-28: lender vault UI shipped, two real bugs found and fixed on the live demo
+
+Real hardening pass (not a new feature from scratch): used the live site as a
+real user would, found the `/vault` page only ever exposed
+`depositCollateral()` — never `borrow()`, `repay()`, `withdrawCollateral()`,
+or the lender-side `deposit()`/`withdraw()` that have existed in the
+contract and SDKs since commit `f55e3c6` — and while wiring those up, found
+two real, currently-live defects:
+
+1. **Wrong chain ID on wallet connect.** `SwapCard`/`VaultCard`'s own
+   "Connect Wallet" buttons hardcoded `connect(1983)` (QIE Testnet), so on
+   the live demo site (`NEXT_PUBLIC_QIE_FORGE_NETWORK=demo`, chain 31337)
+   a real wallet user clicking either button would be told to switch to
+   the wrong chain — every subsequent `eth_sendTransaction` would target a
+   network with nothing deployed. The header's own `WalletConnectButton`
+   already derived `chainId` correctly from `getNetworkConfig()`; the two
+   duplicated in-card buttons just never reused that. Fixed: both cards
+   now call `connect(getNetworkConfig().chainId)`.
+2. **The live demo oracle went stale and `borrow()`/`healthFactor()`
+   started reverting for everyone, including the documented demo
+   position.** `QieOracleAdapter`'s staleness check (`maxStalenessSeconds`)
+   was set to 3600s against a `MockAggregatorV3` whose `updatedAt` is only
+   ever set once, at deploy time — so ~1 hour after any deploy,
+   `StalePrice` starts reverting forever. Confirmed live:
+   `cast call healthFactor(deployer)` reverted with `StalePrice` before the
+   fix. Fixed two ways: (a) called the deployed oracle's `setMaxStaleness`
+   (owner-only, deployer key held) to 100 years on the live instance —
+   confirmed `healthFactor(deployer)` returns `2.8e18` again immediately
+   after; (b) changed `DeployDemo.s.sol`'s oracle constructor to the same
+   ~10-year window so a future redeploy doesn't reintroduce this.
+
+**A third, more serious issue surfaced while building the lender UI and
+testing it against the real deployed contract, not just reading the
+source**: `QieForgeVault.deposit()`'s "first depositor mints 1:1" rule
+ignored any `totalAssets()` that already existed before `totalLenderShares`
+was ever nonzero — exactly the state `DeployDemo.s.sol`'s own seeding
+pattern creates (500,000 TUSD minted straight into the vault, never
+through `deposit()`). Reproduced for real against the live (pre-fix)
+contract: depositing 1,000 TUSD as the first-ever lender minted 1,000
+shares worth **501,000 TUSD** (100% of `totalAssets()`, including the
+pre-funded 500,000 + the deployer's 20,000 outstanding debt) — a real,
+practically-zero-cost drain of operator-seeded launch liquidity, the exact
+textbook ERC4626 "donation/inflation" attack, with no mitigation (unlike
+`QieForgePair`'s `MINIMUM_LIQUIDITY` burn-to-`0xdEaD`, which this contract
+had no equivalent of). **Fixed in
+`packages/contracts/src/vault/QieForgeVault.sol`**: added
+`MINIMUM_LENDER_SHARES = 1000`, permanently locked (attributed to nobody)
+on the first deposit into a vault whose `totalAssets()` is already
+nonzero, sized so the depositor's own shares are worth exactly what they
+put in and the locked floor absorbs the pre-existing value — a genuinely
+pristine vault (`totalAssets() == 0`) still mints 1:1, unchanged. Two new
+Foundry tests added:
+`test_deposit_firstDepositor_cannotDrainPreFundedLiquidity` (direct
+reproduction + fix assertion) and
+`test_deposit_freshVault_firstDepositorStillMints1to1` (regression guard
+for the unaffected case). **`forge test`: 43/43 pass** (was 41/41).
+Re-verified live against a freshly redeployed demo stack (new addresses,
+same seed amounts, same documented 500,000/20,000/2.8x numbers): the exact
+same attack now round-trips exactly 1,000 TUSD in, 1,000 TUSD out — no
+windfall. **No real funds were ever at risk** — this was found and fixed
+entirely before any QIE Testnet/Mainnet deployment; the live demo chain's
+tokens have zero real value, and the vulnerable (pre-fix) bytecode's live
+instance was abandoned, not patched in place (immutable bytecode), by
+redeploying fresh with the fixed source.
+
+**Shipped**: `components/VaultCard.tsx` (deposit/withdraw collateral,
+borrow, repay) and a new `components/LendCard.tsx` (supply/withdraw
+liquidity as a lender, with live pool stats: your supplied value, your
+shares, idle liquidity, total outstanding debt) are both live on
+`/vault`. New ABI entries in `lib/contracts.ts`
+(`withdrawCollateral`/`repay`/`deposit`/`withdraw`/`lenderShares`/
+`totalLenderShares`/`totalAssets`/`totalDebtPrincipal`/`borrowAsset`), a
+shared `lib/erc20Actions.ts` (`ensureAllowance`/`sendContractCall`) used by
+both the swap and vault/lend flows instead of duplicating the
+approve-then-send pattern. Verified the exact encoding every handler uses
+against the live redeployed contract with `cast send`/`cast call` using
+real anvil test accounts: `depositCollateral` → `borrow` → `repay` →
+`withdrawCollateral` round-trips cleanly, and lender `deposit` → `withdraw`
+round-trips cleanly post-fix. `next build`/`next lint` clean, zero type
+errors. Not click-tested with a real wallet extension (same honest gap as
+the swap/deposit flow already had — this environment has no browser
+wallet).
+
+**Infra**: the self-hosted demo RPC (`qie-forge-demo-rpc.caddy`, public on
+`:8647`) had silently dropped out of `/etc/caddy/sites-enabled/` a second
+time (first was 2026-10-27) because it was never added to this box's
+managed `caddy/sites/` directory or `CADDY_SITES` list, so every
+`install.sh caddy` run regenerated the enabled set without it. Fixed for
+real this time (not another hand-copy into `/etc/caddy/`): added the site
+file to `infra-box/caddy/sites/qie-forge-demo-rpc.caddy` and
+`qie-forge-demo-rpc` to `CADDY_SITES` on the box, verified a second
+`install.sh caddy` run keeps it enabled.
+
 ## Built and verified: contracts (local EVM, Foundry)
 
 ```
 cd packages/contracts && forge test -vv
 ```
 
-**41/41 tests pass** across 4 suites (`QieOracleAdapter` 8, `QieForgeRouter`
-8, `QieForgeVault` 18, `QieForgePair` 7). Beyond the original 25 (constant-
+**43/43 tests pass** across 4 suites (`QieOracleAdapter` 8, `QieForgeRouter`
+8, `QieForgeVault` 20, `QieForgePair` 7) — see "2026-10-28" section above
+for the two newest (the real donation/inflation-attack regression tests).
+Beyond the original 25 (constant-
 product invariants, LP math, fee accrual/protocol-fee switch, TWAP,
 slippage/deadline checks, oracle staleness/decimals handling, base
 LTV/health-factor/interest/liquidation), this pass added:

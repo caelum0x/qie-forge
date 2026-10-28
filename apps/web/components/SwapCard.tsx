@@ -3,7 +3,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { encodeFunctionData, parseUnits, formatUnits } from "viem";
 import { useWallet } from "./WalletProvider";
-import { ROUTER_ABI, ERC20_ABI } from "@/lib/contracts";
+import { ROUTER_ABI } from "@/lib/contracts";
+import { getNetworkConfig } from "@/lib/config";
+import { ensureAllowance, sendContractCall } from "@/lib/erc20Actions";
 import { SwapIcon } from "./icons";
 
 interface Token {
@@ -14,6 +16,7 @@ interface Token {
 
 export function SwapCard({ tokens, routerAddress }: { tokens: Token[]; routerAddress: `0x${string}` }) {
   const { provider, address, connect } = useWallet();
+  const chainId = getNetworkConfig().chainId;
   const [tokenInSymbol, setTokenInSymbol] = useState(tokens[0]?.symbol);
   const [tokenOutSymbol, setTokenOutSymbol] = useState(tokens[1]?.symbol ?? tokens[0]?.symbol);
   const [amountIn, setAmountIn] = useState("");
@@ -62,30 +65,14 @@ export function SwapCard({ tokens, routerAddress }: { tokens: Token[]; routerAdd
     if (!provider || !address || !tokenIn || !tokenOut || !amountInBase || !quote) return;
     setStatus("Checking allowance…");
     try {
-      const allowanceData = encodeFunctionData({
-        abi: ERC20_ABI,
-        functionName: "allowance",
-        args: [address as `0x${string}`, routerAddress],
-      });
-      const allowanceRaw = (await provider.request({
-        method: "eth_call",
-        params: [{ to: tokenIn.address, data: allowanceData, from: address }, "latest"],
-      })) as string;
-      const allowance = BigInt(allowanceRaw);
-
-      if (allowance < amountInBase) {
-        setStatus("Requesting approval…");
-        const approveData = encodeFunctionData({
-          abi: ERC20_ABI,
-          functionName: "approve",
-          args: [routerAddress, amountInBase],
-        });
-        const approveTx = await provider.request({
-          method: "eth_sendTransaction",
-          params: [{ from: address, to: tokenIn.address, data: approveData }],
-        });
-        setStatus(`Approval sent (${String(approveTx).slice(0, 10)}…), submitting swap…`);
-      }
+      const approved = await ensureAllowance(
+        provider,
+        tokenIn.address,
+        address as `0x${string}`,
+        routerAddress,
+        amountInBase,
+      );
+      if (approved) setStatus("Approval sent, submitting swap…");
 
       const deadline = Math.floor(Date.now() / 1000) + 1800;
       const minOut = (BigInt(quote) * 99n) / 100n; // 1% slippage tolerance
@@ -94,11 +81,8 @@ export function SwapCard({ tokens, routerAddress }: { tokens: Token[]; routerAdd
         functionName: "swapExactTokensForTokens",
         args: [amountInBase, minOut, [tokenIn.address, tokenOut.address], address as `0x${string}`, BigInt(deadline)],
       });
-      const txHash = await provider.request({
-        method: "eth_sendTransaction",
-        params: [{ from: address, to: routerAddress, data: swapData }],
-      });
-      setStatus(`Swap submitted: ${String(txHash)}`);
+      const txHash = await sendContractCall(provider, address as `0x${string}`, routerAddress, swapData);
+      setStatus(`Swap submitted: ${txHash}`);
     } catch (err) {
       setStatus(err instanceof Error ? err.message : "Swap failed");
     }
@@ -132,7 +116,7 @@ export function SwapCard({ tokens, routerAddress }: { tokens: Token[]; routerAdd
       {quoting && <p className="mt-2 text-xs text-muted">Fetching live quote…</p>}
 
       <button
-        onClick={() => (address ? handleSwap() : connect(1983))}
+        onClick={() => (address ? handleSwap() : connect(chainId))}
         disabled={Boolean(address) && (!quote || !amountInBase)}
         className="btn-primary w-full mt-4 py-2.5 text-sm"
       >

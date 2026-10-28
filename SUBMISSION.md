@@ -29,7 +29,7 @@ for this hackathon.
   oracle adapter (`QieOracleAdapter`) that talks to QIE's *real* deployed price
   feeds. No existing DEX/lending protocol's source was read or copied — every
   formula is derived from first principles in each contract's NatSpec.
-  **41/41 Foundry tests pass** (`cd packages/contracts && forge test -vv`),
+  **43/43 Foundry tests pass** (`cd packages/contracts && forge test -vv`),
   covering AMM invariants, LP share math, fee accrual, TWAP accumulation,
   multi-hop routing (including 3-pool paths and exact-output swaps), oracle
   staleness/decimals/rotation edge cases, and vault health-factor/liquidation
@@ -149,7 +149,7 @@ cd apps/web && npm install && npm run dev
 | Criterion (weight) | How QIE Forge addresses it |
 |---|---|
 | Innovation (30%) | Clean-room AMM + lending vault combo, built around an independently-discovered correction to QIE's own oracle docs — most entrants would copy the broken `getPrice(string)` sample and silently fail. |
-| Technical Quality (25%) | 41/41 Foundry tests, 3 independently-implemented SDKs with real anvil-deployment integration tests (not mocks), a real lender-accounting bug and liquidation bad-debt bug found and fixed pre-deployment with a reproducing regression test. |
+| Technical Quality (25%) | 43/43 Foundry tests, 3 independently-implemented SDKs with real anvil-deployment integration tests (not mocks), three real bugs (liquidation bad-debt, a wrong wallet chain-ID on connect, and a lender-share donation/inflation attack) found and fixed pre-deployment, each with a reproducing regression test or live re-verification. |
 | User Experience (15%) | Live public frontend, no login wall, real swap quotes and vault positions rendered end-to-end through the actual UI, not screenshots. |
 | Mainnet Integration (15%) | **Honest gap — see below.** Oracle/explorer/RPC integration is against real QIE Mainnet contracts and endpoints today; the protocol's own contracts are not yet deployed to QIE Mainnet. |
 | Business Potential (15%) | A working DEX + money market is the single most load-bearing DeFi primitive a new L1 needs; swap/LP/borrow activity is exactly the kind of recurring, measurable usage (wallet growth, tx volume, recurring users) the hackathon's own traction milestones reward. |

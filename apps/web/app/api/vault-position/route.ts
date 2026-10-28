@@ -17,11 +17,16 @@ export async function GET(req: NextRequest) {
 
   try {
     const client = getPublicClient();
-    const [position, healthFactor, currentDebt] = await Promise.all([
-      client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "positions", args: [user] }),
-      client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "healthFactor", args: [user] }),
-      client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "currentDebt", args: [user] }),
-    ]);
+    const [position, healthFactor, currentDebt, lenderShares, totalLenderShares, totalAssets, totalDebtPrincipal] =
+      await Promise.all([
+        client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "positions", args: [user] }),
+        client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "healthFactor", args: [user] }),
+        client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "currentDebt", args: [user] }),
+        client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "lenderShares", args: [user] }),
+        client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "totalLenderShares" }),
+        client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "totalAssets" }),
+        client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "totalDebtPrincipal" }),
+      ]);
     const [collateral, debtPrincipal, lastAccrual] = position as [bigint, bigint, bigint];
 
     return NextResponse.json({
@@ -30,6 +35,12 @@ export async function GET(req: NextRequest) {
       lastAccrual: lastAccrual.toString(),
       healthFactor: (healthFactor as bigint).toString(),
       currentDebt: (currentDebt as bigint).toString(),
+      // Lender-side pool stats (see LendCard.tsx) — global, not per-user,
+      // except lenderShares which is this user's own share balance.
+      lenderShares: (lenderShares as bigint).toString(),
+      totalLenderShares: (totalLenderShares as bigint).toString(),
+      totalAssets: (totalAssets as bigint).toString(),
+      totalDebtPrincipal: (totalDebtPrincipal as bigint).toString(),
     });
   } catch (err) {
     return NextResponse.json(
