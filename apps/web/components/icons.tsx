@@ -64,6 +64,14 @@ export function CoinsIcon({ className = base }: IconProps) {
   );
 }
 
+export function DropletIcon({ className = base }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" className={className}>
+      <path d="M12 3C9 7 6 10.5 6 14a6 6 0 0012 0c0-3.5-3-7-6-11z" />
+    </svg>
+  );
+}
+
 export function AlertIcon({ className = base }: IconProps) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" className={className}>

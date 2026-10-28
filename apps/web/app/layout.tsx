@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
 import "./globals.css";
-import { ShieldIcon, SwapIcon } from "@/components/icons";
+import { DropletIcon, ShieldIcon, SwapIcon } from "@/components/icons";
 import { WalletProvider } from "@/components/WalletProvider";
 import { WalletConnectButton } from "@/components/WalletConnectButton";
 import { getNetworkConfig } from "@/lib/config";
@@ -37,6 +37,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
                 <div className="flex items-center gap-6 text-sm text-muted">
                   <Link href="/swap" className="inline-flex items-center gap-1.5 hover:text-foreground">
                     <SwapIcon className="w-4 h-4" /> Swap
+                  </Link>
+                  <Link href="/pool" className="inline-flex items-center gap-1.5 hover:text-foreground">
+                    <DropletIcon className="w-4 h-4" /> Pool
                   </Link>
                   <Link href="/vault" className="inline-flex items-center gap-1.5 hover:text-foreground">
                     <ShieldIcon className="w-4 h-4" /> Vault
