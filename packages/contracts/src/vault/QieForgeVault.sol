@@ -155,13 +155,31 @@ contract QieForgeVault is ReentrancyGuard {
 
     /// @notice Health factor scaled 1e18. >= 1e18 is safe; < 1e18 is liquidatable.
     /// HF = (collateralValueUsd * liquidationThresholdBps) / (debtValueUsd * BPS_DENOMINATOR)
+    ///
+    /// Debt is computed interest-inclusive, the same way `currentDebt()`
+    /// does, rather than reading the stored `pos.debtPrincipal` as-is. This
+    /// is a view function (no `_accrue` mutation happens on this path), so
+    /// using the raw stored principal would silently understate debt for
+    /// any position that hasn't been touched (borrow/repay/liquidate) since
+    /// interest started accruing -- making it look artificially healthier
+    /// to every external reader of this function (the frontend's `/vault`
+    /// display, and any liquidator bot deciding whether a position is
+    /// worth liquidating), which both delays real liquidations and lets
+    /// bad debt accumulate unnoticed. See
+    /// test_healthFactor_reflectsAccruedInterest_notJustStalePrincipal for
+    /// the reproduction.
     function healthFactor(address user) public view returns (uint256) {
         Position memory pos = positions[user];
         if (pos.debtPrincipal == 0) return type(uint256).max;
 
+        uint256 elapsed = block.timestamp - pos.lastAccrual;
+        uint256 interest = (uint256(pos.debtPrincipal) * ratePerSecond18 * elapsed) / WAD;
+        uint256 accruedDebtPrincipal = pos.debtPrincipal + interest;
+
         uint256 collateralValue =
             _usdValue(pos.collateral, collateralDecimals, oracle.getPriceUsd18(address(collateralAsset)));
-        uint256 debtValue = _usdValue(pos.debtPrincipal, borrowDecimals, oracle.getPriceUsd18(address(borrowAsset)));
+        uint256 debtValue =
+            _usdValue(accruedDebtPrincipal, borrowDecimals, oracle.getPriceUsd18(address(borrowAsset)));
         if (debtValue == 0) return type(uint256).max;
 
         return (collateralValue * liquidationThresholdBps * WAD) / (debtValue * BPS_DENOMINATOR);

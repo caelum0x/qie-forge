@@ -174,15 +174,25 @@ real open gap.
 - **Built and verified live**: TypeScript, Python, and Rust SDKs + the CLI,
   all against real testnet/mainnet RPCs and the real oracle contracts.
 - **Built and verified locally**: the full AMM + lending vault contract
-  suite (43/43 Foundry tests); both the Python and Rust SDKs' read/quote
-  logic against a real local deployment of the actual contract bytecode
-  (anvil); the frontend's quote/vault-position APIs against that same real
-  deployment, now also publicly reachable (see SUBMISSION.md).
-- **Not yet done**: an actual on-chain QIE Testnet/Mainnet deployment of the
-  protocol contracts — blocked on a funded deployer wallet (QIE's testnet
-  faucet is a connect-a-wallet flow, not a plain API, so claiming testnet or
-  mainnet QIE for a deployer key is a real owner/operator step); a
-  real-browser wallet click-through test for the frontend.
+  suite (44/44 Foundry tests, including a fix for a real
+  `healthFactor()` staleness bug — see docs/STATUS.md); both the Python and
+  Rust SDKs' read/quote logic against a real local deployment of the actual
+  contract bytecode (anvil); the frontend's quote/vault-position APIs
+  against that same real deployment, now also publicly reachable (see
+  SUBMISSION.md).
+- **Deployment is fully prepared, one owner-approved script run away**:
+  `packages/contracts/script/Deploy.s.sol` (AMM core: Factory/Router/Oracle
+  adapter) and `script/DeployVault.s.sol` (the lending vault, fail-closed
+  on missing real asset addresses — same posture as `QusdcClient`) were
+  both dry-run to completion against a real local `anvil --fork-url`
+  fork of live QIE Mainnet (chain 1990, real block state) — see
+  docs/STATUS.md for the full transcript. `.env.example` in
+  `packages/contracts` and `apps/web` document every required variable.
+- **Not yet done**: the actual on-chain QIE Testnet/Mainnet broadcast
+  itself — blocked on a funded deployer wallet (QIE's testnet faucet is a
+  connect-a-wallet flow, not a plain API, so claiming testnet or mainnet
+  QIE for a deployer key is a real owner/operator step); a real-browser
+  wallet click-through test for the frontend.
 
 ## License
 

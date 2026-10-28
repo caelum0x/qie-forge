@@ -22,6 +22,7 @@ contract QieForgeVaultTest is Test {
     uint256 constant LIQ_THRESHOLD_BPS = 8_000;
     uint256 constant LIQ_BONUS_BPS = 500;
     uint256 constant RATE_PER_SECOND_18 = 1_585_489_599; // ≈ 5% APR
+    uint256 constant BPS_DENOMINATOR = 10_000;
 
     function setUp() public {
         collateral = new MockERC20("Wrapped QIE", "WQIE", 18);
@@ -97,6 +98,38 @@ contract QieForgeVaultTest is Test {
         assertGt(debtAfter, debtBefore);
         // ~5% APR on 700e6 over 1 year ≈ 35e6 extra debt.
         assertApproxEqRel(debtAfter - debtBefore, 35e6, 2e16);
+    }
+
+    /// @notice `healthFactor()` is a view function with no state mutation,
+    /// so it must compute debt the same interest-inclusive way
+    /// `currentDebt()` does -- using the raw, stale `pos.debtPrincipal`
+    /// instead (the pre-fix behavior) makes a position whose interest has
+    /// accrued for a long time without any borrow/repay/liquidate call
+    /// *look* healthier than it really is to any external caller (the
+    /// frontend's own `/vault` health-factor display, or a liquidator bot
+    /// deciding whether a position is worth liquidating), delaying real
+    /// liquidations and letting bad debt accumulate silently.
+    function test_healthFactor_reflectsAccruedInterest_notJustStalePrincipal() public {
+        vm.startPrank(borrower);
+        vault.depositCollateral(1_000e18);
+        vault.borrow(700e6);
+        vm.stopPrank();
+
+        // No interaction for a while -- pos.lastAccrual is stale. Kept
+        // under the oracle's 1-day staleness window (set in setUp) so this
+        // test isolates the healthFactor-vs-currentDebt discrepancy instead
+        // of also tripping StalePrice.
+        vm.warp(block.timestamp + 12 hours);
+
+        uint256 accruedDebt = vault.currentDebt(borrower); // known-correct, interest-inclusive
+        assertGt(accruedDebt, 700e6, "sanity: interest should have accrued");
+
+        // healthFactor() must be computed against that same accrued debt,
+        // i.e. HF == (collateralValueUsd * liqThresholdBps) / (accruedDebtValueUsd * BPS_DENOMINATOR).
+        // Collateral/borrow price are both $1.00 here (18/6 decimals), so
+        // USD value reduces to a straight unit comparison.
+        uint256 expectedHf = (1_000e18 * LIQ_THRESHOLD_BPS * 1e18) / (accruedDebt * 1e12 * BPS_DENOMINATOR);
+        assertApproxEqRel(vault.healthFactor(borrower), expectedHf, 1e9, "healthFactor must include accrued interest");
     }
 
     function test_liquidation_revertsWhenPositionHealthy() public {
