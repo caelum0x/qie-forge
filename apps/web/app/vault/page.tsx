@@ -6,13 +6,18 @@ import {
   getVaultBorrowDecimals,
   getVaultBorrowSymbol,
 } from "@/lib/config";
+import { getVaultPoolStats } from "@/lib/vaultStats";
 import { VaultCard } from "@/components/VaultCard";
 import { LendCard } from "@/components/LendCard";
+import { VaultPoolStatsBar } from "@/components/VaultPoolStatsBar";
 import { AlertIcon } from "@/components/icons";
 import { DemoBanner } from "@/components/DemoBanner";
 
-export default function VaultPage() {
+export const dynamic = "force-dynamic";
+
+export default async function VaultPage() {
   const vaultAddress = getVaultAddress();
+  const poolStats = await getVaultPoolStats();
   const collateralAddress = process.env.NEXT_PUBLIC_QIE_FORGE_VAULT_COLLATERAL_ADDRESS as
     | `0x${string}`
     | undefined;
@@ -26,6 +31,10 @@ export default function VaultPage() {
     <div className="mx-auto max-w-5xl px-6 py-16">
       <h1 className="text-2xl font-semibold text-foreground mb-6">Lending Vault</h1>
       {getNetworkName() === "demo" && <DemoBanner />}
+
+      {poolStats && borrowAddress && (
+        <VaultPoolStatsBar stats={poolStats} borrowDecimals={borrowDecimals} borrowSymbol={borrowSymbol} />
+      )}
 
       {vaultAddress && collateralAddress ? (
         <div className="flex flex-wrap gap-6">
