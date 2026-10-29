@@ -39,6 +39,21 @@ const NETWORK_DISPLAY_NAMES: Record<QieNetworkName, string> = {
 
 const WalletContext = createContext<WalletContextValue | undefined>(undefined);
 
+/**
+ * Real gap found 2026-10-29: `Eip1193Provider` (lib/wallet.ts) has always
+ * declared the standard optional `on`/`removeListener` event-subscription
+ * methods EIP-1193 providers expose — but nothing in this app ever called
+ * them. Once `connect()` sets `address`/chain once at connect time, the app
+ * never learns about `accountsChanged` (user switches accounts in their
+ * wallet) or `chainChanged` (user switches networks in their wallet) after
+ * that. Every subsequent read (`/api/vault-position`, `/api/pool-position`)
+ * and write (`sendContractCall`'s `from: address`) keeps using the stale
+ * address/assumed chain — a real, well-known Web3 dApp correctness gap
+ * (every wallet-connector library treats this as a baseline requirement),
+ * not a cosmetic one: a user who switches to a different account mid-session
+ * would keep seeing (and acting on) the previous account's vault/pool
+ * position without any indication anything changed.
+ */
 export function WalletProvider({ children }: { children: ReactNode }) {
   const [provider, setProvider] = useState<Eip1193Provider | undefined>(undefined);
   const [address, setAddress] = useState<string | undefined>(undefined);
@@ -48,6 +63,34 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     discoverQieWalletProvider().then(setProvider);
   }, []);
+
+  useEffect(() => {
+    if (!provider?.on) return;
+
+    const handleAccountsChanged = (...args: unknown[]) => {
+      const accounts = args[0] as string[] | undefined;
+      setAddress(accounts && accounts.length > 0 ? accounts[0] : undefined);
+    };
+
+    // The wallet switched to a different chain outside this app's control.
+    // Since every read/write here is hardwired to one configured network
+    // (getNetworkConfig()), the only safe response is to drop the stale
+    // `address` and surface an error — forcing the user to click "Connect
+    // Wallet" again, which re-runs ensureChain() and re-validates everything,
+    // rather than silently continuing to read/write against whatever chain
+    // the wallet is now actually on.
+    const handleChainChanged = () => {
+      setAddress(undefined);
+      setError("Wallet switched networks. Reconnect to continue using this app.");
+    };
+
+    provider.on("accountsChanged", handleAccountsChanged);
+    provider.on("chainChanged", handleChainChanged);
+    return () => {
+      provider.removeListener?.("accountsChanged", handleAccountsChanged);
+      provider.removeListener?.("chainChanged", handleChainChanged);
+    };
+  }, [provider]);
 
   const connect = useCallback(async () => {
     if (!provider) {
