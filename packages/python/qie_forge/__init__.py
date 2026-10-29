@@ -9,7 +9,7 @@ from .oracle import (
 from .qusdc import QusdcClient, QusdcConfig, resolve_qusdc_config
 from .explorer import ExplorerClient
 from .amm import get_amount_out, get_amount_in, quote, AmmQuoteError
-from .vault import VaultClient, VaultPosition
+from .vault import VaultClient, VaultPosition, VaultPoolStats
 
 __all__ = [
     "QieForgeError",
@@ -30,4 +30,5 @@ __all__ = [
     "AmmQuoteError",
     "VaultClient",
     "VaultPosition",
+    "VaultPoolStats",
 ]

@@ -60,6 +60,16 @@ def test_vault_position_reads_against_real_deployed_contracts(chain_client):
     oracle.functions.setFeed(borrow_token.address, borrow_feed.address).transact({"from": ANVIL_DEFAULT_ADDRESS})
 
     ltv_bps, liq_threshold_bps, liq_bonus_bps, rate_per_second = 7_500, 8_000, 500, 1_585_489_599
+    reserve_factor_bps = 1_000  # 10%, matching every real deploy's nonzero default
+    borrow_cap = 100_000 * 10**6  # 100,000 TUSD, well above the 700 TUSD borrowed below
+    # Constructor grew to 11 args (liquidationBonusMaxBps/treasury/
+    # reserveFactorBps/borrowCap added across earlier 2026-10-29 passes)
+    # after this test was first written for the original 7-arg
+    # constructor — confirmed broken (`TypeError: Incorrect argument
+    # count. Expected '11', got '7'.`) before this fix, not a
+    # hypothetical. Flat liquidation-bonus curve (max == base) mirrors
+    # QieForgeVault.t.sol's own `LIQ_BONUS_MAX_BPS_FLAT` fixture.
+    liq_bonus_max_bps = liq_bonus_bps
     vault = _deploy(
         w3,
         vault_artifact,
@@ -69,12 +79,21 @@ def test_vault_position_reads_against_real_deployed_contracts(chain_client):
         ltv_bps,
         liq_threshold_bps,
         liq_bonus_bps,
+        liq_bonus_max_bps,
         rate_per_second,
+        ANVIL_DEFAULT_ADDRESS,
+        reserve_factor_bps,
+        borrow_cap,
     )
 
     collateral.functions.mint(ANVIL_DEFAULT_ADDRESS, 10_000 * 10**18).transact({"from": ANVIL_DEFAULT_ADDRESS})
-    borrow_token.functions.mint(vault.address, 1_000_000 * 10**6).transact({"from": ANVIL_DEFAULT_ADDRESS})
+    borrow_token.functions.mint(ANVIL_DEFAULT_ADDRESS, 1_000_000 * 10**6).transact({"from": ANVIL_DEFAULT_ADDRESS})
+    borrow_token.functions.approve(vault.address, 2**256 - 1).transact({"from": ANVIL_DEFAULT_ADDRESS})
     collateral.functions.approve(vault.address, 2**256 - 1).transact({"from": ANVIL_DEFAULT_ADDRESS})
+
+    # A real lender supply, so `totalLenderShares`/`lenderShares` below
+    # read real nonzero on-chain state instead of just the zero-sentinel.
+    vault.functions.deposit(1_000_000 * 10**6).transact({"from": ANVIL_DEFAULT_ADDRESS})
 
     vault.functions.depositCollateral(1_000 * 10**18).transact({"from": ANVIL_DEFAULT_ADDRESS})
     vault.functions.borrow(700 * 10**6).transact({"from": ANVIL_DEFAULT_ADDRESS})
@@ -91,6 +110,22 @@ def test_vault_position_reads_against_real_deployed_contracts(chain_client):
 
     assert vault_client.get_ltv_bps() == ltv_bps
     assert vault_client.get_liquidation_threshold_bps() == liq_threshold_bps
+
+    # --- Real assertions for the pool-stats/liquidation-bonus surface added this pass. ---
+    assert vault_client.get_liquidation_bonus_bps(ANVIL_DEFAULT_ADDRESS) == liq_bonus_bps
+    assert vault_client.get_lender_shares(ANVIL_DEFAULT_ADDRESS) == 1_000_000 * 10**6
+
+    stats = vault_client.get_pool_stats(ANVIL_DEFAULT_ADDRESS)
+    assert stats.total_debt_principal == 700 * 10**6
+    assert stats.borrow_cap == borrow_cap
+    assert stats.reserve_factor_bps == reserve_factor_bps
+    assert stats.total_lender_shares == 1_000_000 * 10**6
+    assert stats.lender_shares == 1_000_000 * 10**6
+    # idle (300,000) + outstanding debt (700,000) == totalAssets, no interest accrued yet this block.
+    assert stats.total_assets == 1_000_000 * 10**6
+
+    stats_no_user = vault_client.get_pool_stats()
+    assert stats_no_user.lender_shares == 0
 
     # The oracle adapter itself also answers through the REAL verified ABI shape.
     btc_like_price = chain_client.read_contract(collateral_feed.address, QIE_ORACLE_ABI, "latestRoundData")

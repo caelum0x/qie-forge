@@ -16,4 +16,4 @@ pub use errors::QieForgeError;
 pub use networks::{resolve_network, QieNetwork, QieNetworkConfig};
 pub use oracle::{oracle_addresses, OracleClient, OraclePriceResult};
 pub use qusdc::{resolve_qusdc_config, QusdcConfig};
-pub use vault::{VaultClient, VaultPosition};
+pub use vault::{VaultClient, VaultPoolStats, VaultPosition};

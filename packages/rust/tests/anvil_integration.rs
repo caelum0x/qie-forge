@@ -163,6 +163,14 @@ async fn vault_position_reads_against_real_deployed_contracts() {
     let liq_threshold_bps = 8_000u64;
     let liq_bonus_bps = 500u64;
     let rate_per_second = 1_585_489_599u64;
+    let reserve_factor_bps = 1_000u64; // 10%, matching every real deploy's nonzero default
+    let borrow_cap = 100_000u64 * 10u64.pow(6); // 100,000 TUSD, well above the 700 TUSD borrowed below
+    // Constructor grew to 11 args (liquidationBonusMaxBps/treasury/reserveFactorBps/borrowCap
+    // added across earlier 2026-10-29 passes) after this test was first written for the
+    // original 7-arg constructor -- confirmed broken (`DecodingError(InvalidData)` on deploy)
+    // before this fix, not a hypothetical. Flat liquidation-bonus curve (max == base) mirrors
+    // QieForgeVault.t.sol's own `LIQ_BONUS_MAX_BPS_FLAT` fixture.
+    let liq_bonus_max_bps = liq_bonus_bps;
     let vault = deploy(
         &provider,
         from,
@@ -175,14 +183,23 @@ async fn vault_position_reads_against_real_deployed_contracts() {
             U256::from(ltv_bps),
             U256::from(liq_threshold_bps),
             U256::from(liq_bonus_bps),
+            U256::from(liq_bonus_max_bps),
             U256::from(rate_per_second),
+            from,
+            U256::from(reserve_factor_bps),
+            U256::from(borrow_cap),
         ),
     )
     .await;
 
     send(&collateral, from, "mint", (from, U256::from(10_000u64) * U256::exp10(18))).await;
-    send(&borrow_token, from, "mint", (vault.address(), U256::from(1_000_000u64) * U256::exp10(6))).await;
+    send(&borrow_token, from, "mint", (from, U256::from(1_000_000u64) * U256::exp10(6))).await;
+    send(&borrow_token, from, "approve", (vault.address(), U256::MAX)).await;
     send(&collateral, from, "approve", (vault.address(), U256::MAX)).await;
+
+    // A real lender supply, so `totalLenderShares`/`lenderShares` below read real nonzero
+    // on-chain state instead of just the zero-sentinel.
+    send(&vault, from, "deposit", U256::from(1_000_000u64) * U256::exp10(6)).await;
 
     send(&vault, from, "depositCollateral", U256::from(1_000u64) * U256::exp10(18)).await;
     send(&vault, from, "borrow", U256::from(700u64) * U256::exp10(6)).await;
@@ -206,6 +223,22 @@ async fn vault_position_reads_against_real_deployed_contracts() {
 
     assert_eq!(vault_client.get_ltv_bps().await.unwrap(), U256::from(ltv_bps));
     assert_eq!(vault_client.get_liquidation_threshold_bps().await.unwrap(), U256::from(liq_threshold_bps));
+
+    // --- Real assertions for the pool-stats/liquidation-bonus surface added this pass. ---
+    assert_eq!(vault_client.get_liquidation_bonus_bps(&format!("{from:#x}")).await.unwrap(), U256::from(liq_bonus_bps));
+    assert_eq!(vault_client.get_lender_shares(&format!("{from:#x}")).await.unwrap(), U256::from(1_000_000u64) * U256::exp10(6));
+
+    let stats = vault_client.get_pool_stats(Some(&format!("{from:#x}"))).await.unwrap();
+    assert_eq!(stats.total_debt_principal, U256::from(700u64) * U256::exp10(6));
+    assert_eq!(stats.borrow_cap, U256::from(borrow_cap));
+    assert_eq!(stats.reserve_factor_bps, U256::from(reserve_factor_bps));
+    assert_eq!(stats.total_lender_shares, U256::from(1_000_000u64) * U256::exp10(6));
+    assert_eq!(stats.lender_shares, U256::from(1_000_000u64) * U256::exp10(6));
+    // idle (300,000) + outstanding debt (700,000) == totalAssets, no interest accrued yet this block.
+    assert_eq!(stats.total_assets, U256::from(1_000_000u64) * U256::exp10(6));
+
+    let stats_no_user = vault_client.get_pool_stats(None).await.unwrap();
+    assert_eq!(stats_no_user.lender_shares, U256::zero());
 }
 
 #[tokio::test]

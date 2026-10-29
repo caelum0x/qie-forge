@@ -21,6 +21,15 @@ abigen!(
         function currentDebt(address user) external view returns (uint256)
         function ltvBps() external view returns (uint256)
         function liquidationThresholdBps() external view returns (uint256)
+        function liquidationBonusBpsFor(address user) external view returns (uint256)
+        function totalAssets() external view returns (uint256)
+        function totalReserves() external view returns (uint256)
+        function protocolReserves() external view returns (uint256)
+        function totalDebtPrincipal() external view returns (uint256)
+        function borrowCap() external view returns (uint256)
+        function reserveFactorBps() external view returns (uint256)
+        function totalLenderShares() external view returns (uint256)
+        function lenderShares(address user) external view returns (uint256)
     ]"#
 );
 
@@ -39,6 +48,22 @@ impl VaultPosition {
     pub fn is_liquidatable(&self) -> bool {
         self.debt_principal > 0 && self.health_factor < U256::from(WAD)
     }
+}
+
+/// Lending-pool-level stats, independent of any one borrower's own
+/// position — field-for-field the same shape apps/web's `/api/vault-position`
+/// route and `@qie-forge/core`'s `VaultClient.getPoolStats` already return.
+/// `lender_shares` is `U256::zero()` whenever no `user` was passed to `get_pool_stats`.
+#[derive(Debug, Clone)]
+pub struct VaultPoolStats {
+    pub total_assets: U256,
+    pub total_reserves: U256,
+    pub protocol_reserves: U256,
+    pub total_debt_principal: U256,
+    pub borrow_cap: U256,
+    pub reserve_factor_bps: U256,
+    pub total_lender_shares: U256,
+    pub lender_shares: U256,
 }
 
 pub struct VaultClient<'a> {
@@ -90,5 +115,59 @@ impl<'a> VaultClient<'a> {
             .call()
             .await
             .map_err(|e| QieForgeError::InvalidResponse(e.to_string()))
+    }
+
+    /// The severity-scaled liquidation bonus (bps) `user`'s position would pay a liquidator
+    /// right now — see `QieForgeVault.liquidationBonusBpsFor`. Returns the flat base bonus for
+    /// a healthy/debt-free position, matching the contract's own non-reverting behavior on that path.
+    pub async fn get_liquidation_bonus_bps(&self, user: &str) -> Result<U256, QieForgeError> {
+        let user = Address::from_str(user).map_err(|_| QieForgeError::InvalidAddress(user.to_string()))?;
+        self.contract()
+            .liquidation_bonus_bps_for(user)
+            .call()
+            .await
+            .map_err(|e| QieForgeError::InvalidResponse(e.to_string()))
+    }
+
+    /// This lender's own share balance. Zero for any address that has never supplied, or whose
+    /// shares were retired by a full bad-debt-wipeout epoch bump — the contract's own getter
+    /// already encodes that, this just exposes it.
+    pub async fn get_lender_shares(&self, user: &str) -> Result<U256, QieForgeError> {
+        let user = Address::from_str(user).map_err(|_| QieForgeError::InvalidAddress(user.to_string()))?;
+        self.contract().lender_shares(user).call().await.map_err(|e| QieForgeError::InvalidResponse(e.to_string()))
+    }
+
+    /// Pool-level lending stats, independent of any one borrower's own position — the same
+    /// real on-chain reads apps/web's `/api/vault-position` route and `@qie-forge/core`'s
+    /// `getPoolStats` already expose. Pass `user` to also get that lender's own share balance;
+    /// pass `None` to get pool-wide stats only.
+    pub async fn get_pool_stats(&self, user: Option<&str>) -> Result<VaultPoolStats, QieForgeError> {
+        let contract = self.contract();
+        let lender_shares = match user {
+            Some(user) => self.get_lender_shares(user).await?,
+            None => U256::zero(),
+        };
+        let total_assets = contract.total_assets().call().await.map_err(|e| QieForgeError::InvalidResponse(e.to_string()))?;
+        let total_reserves = contract.total_reserves().call().await.map_err(|e| QieForgeError::InvalidResponse(e.to_string()))?;
+        let protocol_reserves =
+            contract.protocol_reserves().call().await.map_err(|e| QieForgeError::InvalidResponse(e.to_string()))?;
+        let total_debt_principal =
+            contract.total_debt_principal().call().await.map_err(|e| QieForgeError::InvalidResponse(e.to_string()))?;
+        let borrow_cap = contract.borrow_cap().call().await.map_err(|e| QieForgeError::InvalidResponse(e.to_string()))?;
+        let reserve_factor_bps =
+            contract.reserve_factor_bps().call().await.map_err(|e| QieForgeError::InvalidResponse(e.to_string()))?;
+        let total_lender_shares =
+            contract.total_lender_shares().call().await.map_err(|e| QieForgeError::InvalidResponse(e.to_string()))?;
+
+        Ok(VaultPoolStats {
+            total_assets,
+            total_reserves,
+            protocol_reserves,
+            total_debt_principal,
+            borrow_cap,
+            reserve_factor_bps,
+            total_lender_shares,
+            lender_shares,
+        })
     }
 }
