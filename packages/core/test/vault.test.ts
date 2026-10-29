@@ -41,3 +41,23 @@ describe("VaultClient construction", () => {
     await expect(vault.getPosition("not-an-address")).rejects.toThrowError(QieForgeError);
   });
 });
+
+describe("VaultClient pool-stats/liquidation-bonus surface (2026-10-29 parity gap)", () => {
+  it("rejects an invalid user address in getLiquidationBonusBps before any network call", async () => {
+    const chain = new ChainClient({ network: "testnet" });
+    const vault = new VaultClient(chain, "0x0000000000000000000000000000000000000001");
+    await expect(vault.getLiquidationBonusBps("not-an-address")).rejects.toThrowError(QieForgeError);
+  });
+
+  it("rejects an invalid user address in getLenderShares before any network call", async () => {
+    const chain = new ChainClient({ network: "testnet" });
+    const vault = new VaultClient(chain, "0x0000000000000000000000000000000000000001");
+    await expect(vault.getLenderShares("not-an-address")).rejects.toThrowError(QieForgeError);
+  });
+
+  it("rejects an invalid user address in getPoolStats before any network call", async () => {
+    const chain = new ChainClient({ network: "testnet" });
+    const vault = new VaultClient(chain, "0x0000000000000000000000000000000000000001");
+    await expect(vault.getPoolStats("not-an-address")).rejects.toThrowError(QieForgeError);
+  });
+});

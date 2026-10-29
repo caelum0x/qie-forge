@@ -12,6 +12,8 @@ const addressUrlMock = vi.fn();
 const getPositionMock = vi.fn();
 const getLtvBpsMock = vi.fn();
 const getLiquidationThresholdBpsMock = vi.fn();
+const getLiquidationBonusBpsMock = vi.fn();
+const getPoolStatsMock = vi.fn();
 const getAmountsOutMock = vi.fn();
 const isLiquidatableMock = vi.fn();
 
@@ -44,6 +46,8 @@ vi.mock("@qie-forge/core", () => {
     getPosition = getPositionMock;
     getLtvBps = getLtvBpsMock;
     getLiquidationThresholdBps = getLiquidationThresholdBpsMock;
+    getLiquidationBonusBps = getLiquidationBonusBpsMock;
+    getPoolStats = getPoolStatsMock;
   }
   return {
     ChainClient,
@@ -95,6 +99,8 @@ describe("run()", () => {
     getPositionMock.mockReset();
     getLtvBpsMock.mockReset();
     getLiquidationThresholdBpsMock.mockReset();
+    getLiquidationBonusBpsMock.mockReset();
+    getPoolStatsMock.mockReset();
     getAmountsOutMock.mockReset();
     isLiquidatableMock.mockReset();
   });
@@ -232,7 +238,7 @@ describe("run()", () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it("vault-position reports a position's health factor and liquidatability", async () => {
+  it("vault-position reports a position's health factor, liquidatability, bonus, and pool stats", async () => {
     getPositionMock.mockResolvedValue({
       collateral: 500_000_000_000_000_000_000n,
       debtPrincipal: 20_000_000_000n,
@@ -242,6 +248,17 @@ describe("run()", () => {
     });
     getLtvBpsMock.mockResolvedValue(7_500n);
     getLiquidationThresholdBpsMock.mockResolvedValue(8_000n);
+    getLiquidationBonusBpsMock.mockResolvedValue(650n);
+    getPoolStatsMock.mockResolvedValue({
+      totalAssets: 520_000_000_000n,
+      totalReserves: 1_000_000n,
+      protocolReserves: 900_000n,
+      totalDebtPrincipal: 20_000_000_000n,
+      borrowCap: 1_000_000_000_000n,
+      reserveFactorBps: 1_000n,
+      totalLenderShares: 500_000_000_000n,
+      lenderShares: 10_000_000_000n,
+    });
     isLiquidatableMock.mockReturnValue(true);
 
     await run([
@@ -255,6 +272,8 @@ describe("run()", () => {
     ]);
 
     expect(getPositionMock).toHaveBeenCalledWith("0xuser");
+    expect(getLiquidationBonusBpsMock).toHaveBeenCalledWith("0xuser");
+    expect(getPoolStatsMock).toHaveBeenCalledWith("0xuser");
     const printed = JSON.parse((logSpy.mock.calls[0]?.[0] as string) ?? "{}");
     expect(printed).toMatchObject({
       network: "demo",
@@ -265,7 +284,18 @@ describe("run()", () => {
       healthFactor: "900000000000000000",
       ltvBps: "7500",
       liquidationThresholdBps: "8000",
+      liquidationBonusBps: "650",
       isLiquidatable: true,
+      pool: {
+        totalAssets: "520000000000",
+        totalReserves: "1000000",
+        protocolReserves: "900000",
+        totalDebtPrincipal: "20000000000",
+        borrowCap: "1000000000000",
+        reserveFactorBps: "1000",
+        totalLenderShares: "500000000000",
+        lenderShares: "10000000000",
+      },
     });
   });
 

@@ -99,16 +99,33 @@ async function cmdExplorerLookup(flags: Record<string, string>): Promise<void> {
  * — blocked on a funded deployer wallet); it points at the same
  * self-hosted anvil devnet backing the live /vault and /swap frontend.
  */
+/**
+ * 2026-10-29 (later pass): `vault-position` only ever printed the
+ * borrower-side fields (position/ltv/liquidationThreshold) — none of the
+ * lending-pool-level stats (totalAssets/protocolReserves/borrowCap/
+ * reserveFactorBps/totalLenderShares/lenderShares) or the severity-scaled
+ * liquidation bonus the vault contract grew across 2026-10-28/29's later
+ * passes, even though apps/web's own `/api/vault-position` route already
+ * reads every one of those real fields for the live LendCard/VaultCard
+ * UI. A real SDK consumer (e.g. a liquidation bot or lending dashboard,
+ * scripts/liquidation-bot-demo.mjs being the one that reimplements a raw
+ * eth_call for the bonus instead of using this SDK) had no way to read
+ * any of it through `@qie-forge/core`'s `VaultClient` at all. Closed via
+ * `VaultClient.getPoolStats`/`getLiquidationBonusBps`, now wired through
+ * here.
+ */
 async function cmdVaultPosition(flags: Record<string, string>): Promise<void> {
   const network = asNetwork(flags.network ?? "testnet");
   const vault = requireFlag(flags, "vault");
   const user = requireFlag(flags, "user");
   const client = new ChainClient({ network });
   const vaultClient = new VaultClient(client, vault);
-  const [position, ltvBps, liquidationThresholdBps] = await Promise.all([
+  const [position, ltvBps, liquidationThresholdBps, liquidationBonusBps, poolStats] = await Promise.all([
     vaultClient.getPosition(user),
     vaultClient.getLtvBps(),
     vaultClient.getLiquidationThresholdBps(),
+    vaultClient.getLiquidationBonusBps(user),
+    vaultClient.getPoolStats(user),
   ]);
   console.log(
     JSON.stringify(
@@ -123,7 +140,18 @@ async function cmdVaultPosition(flags: Record<string, string>): Promise<void> {
         currentDebt: position.currentDebt.toString(),
         ltvBps: ltvBps.toString(),
         liquidationThresholdBps: liquidationThresholdBps.toString(),
+        liquidationBonusBps: liquidationBonusBps.toString(),
         isLiquidatable: isLiquidatable(position),
+        pool: {
+          totalAssets: poolStats.totalAssets.toString(),
+          totalReserves: poolStats.totalReserves.toString(),
+          protocolReserves: poolStats.protocolReserves.toString(),
+          totalDebtPrincipal: poolStats.totalDebtPrincipal.toString(),
+          borrowCap: poolStats.borrowCap.toString(),
+          reserveFactorBps: poolStats.reserveFactorBps.toString(),
+          totalLenderShares: poolStats.totalLenderShares.toString(),
+          lenderShares: poolStats.lenderShares.toString(),
+        },
       },
       null,
       2,
