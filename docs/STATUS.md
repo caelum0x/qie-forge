@@ -68,9 +68,7 @@ effective balance reads `0` forever after the reset, confirmed below.
    500,000 WQIE / 20,000 TUSD position — this fix didn't require touching
    the public demo's deployment.
 
-**Commit**: `pending` (this session) — `packages/contracts/src/vault/
-QieForgeVault.sol`, `packages/contracts/test/QieForgeVault.t.sol`,
-`README.md`, `SUBMISSION.md`, `docs/STATUS.md`, `docs/TEAM-PRESENTATION.md`.
+**Commit**: `b02a83d`, pushed to `caelum0x/qie-forge` main (`48e21c3..b02a83d`).
 
 ## 2026-10-29 (newest): bad-debt write-off vs. realized protocol reserves — a real insolvency/DoS gap, distinct from the borrow-cap work below
 
