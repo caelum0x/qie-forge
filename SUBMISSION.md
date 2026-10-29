@@ -29,16 +29,22 @@ for this hackathon.
   oracle adapter (`QieOracleAdapter`) that talks to QIE's *real* deployed price
   feeds. No existing DEX/lending protocol's source was read or copied — every
   formula is derived from first principles in each contract's NatSpec.
-  **52/52 Foundry tests pass** (`cd packages/contracts && forge test -vv`),
+  **57/57 Foundry tests pass** (`cd packages/contracts && forge test -vv`),
   covering AMM invariants, LP share math, fee accrual, TWAP accumulation,
   multi-hop routing (including 3-pool paths and exact-output swaps), oracle
   staleness/decimals/rotation edge cases, vault health-factor/liquidation
   edge cases (including a specific liquidation-exploit regression test, see
-  "Security findings" below), and a real protocol **reserve factor** —
+  "Security findings" below), a real protocol **reserve factor** —
   `QieForgeVault.reserveFactorBps` carves out a configurable share of every
   borrower's accrued interest (10% in the demo deploy) into withdrawable
-  `treasury` revenue instead of passing 100% of it to lenders, a real
-  on-chain business model, not just working mechanics.
+  `treasury` revenue instead of passing 100% of it to lenders — and a real
+  **severity-scaled liquidation incentive curve**: `liquidationBonusBpsFor`
+  pays a liquidator more (up to `liquidationBonusMaxBps`, 20% in the demo
+  deploy) the further underwater a position is, instead of the flat
+  `liquidationBonusBps` rate every real money market (Compound/Aave) pays
+  regardless of severity — closing the real incentive gap where a liquidator
+  had no extra reason to race to save the protocol from the positions most
+  likely to become unrecoverable bad debt.
 - **Three SDKs, one protocol**: `@qie-forge/core` (TypeScript/viem),
   `packages/python` (web3.py), `packages/rust` (ethers-rs) — each
   independently implements the same chain/oracle/qusdc/AMM read/quote logic,
@@ -126,6 +132,20 @@ alongside collateral. A follow-up adversarial pass over the AMM/Router
 deadline handling) found no further exploitable issue — documented honestly
 in `docs/STATUS.md`'s history, not hidden.
 
+3. **Self-found, same session (2026-10-29), while adding the liquidation-
+   bonus curve**: the forward seize calculation in `liquidate()` was
+   updated to use the new severity-scaled `bonusBps`, but the *inverse*
+   calculation in the same function's "collateral is the binding
+   constraint" branch (`coveredValueUsd`, used to cap `repayAmount` and
+   compute `badDebt` when a position's collateral runs out mid-liquidation)
+   was left reading the old flat `liquidationBonusBps` — the two bonus
+   rates would have silently diverged for any deeply-underwater,
+   collateral-exhausted liquidation (exactly the case most likely to hit
+   that branch), corrupting the bad-debt write-off amount. Caught by
+   re-reading the diff before writing tests, not by a failing test —
+   fixed in the same commit, before any test (or deployment) ever
+   exercised the broken path.
+
 ## How to run this locally
 
 ```bash
@@ -153,10 +173,10 @@ cd apps/web && npm install && npm run dev
 | Criterion (weight) | How QIE Forge addresses it |
 |---|---|
 | Innovation (30%) | Clean-room AMM + lending vault combo, built around an independently-discovered correction to QIE's own oracle docs — most entrants would copy the broken `getPrice(string)` sample and silently fail. |
-| Technical Quality (25%) | 52/52 Foundry tests, 3 independently-implemented SDKs with real anvil-deployment integration tests (not mocks), four real bugs (liquidation bad-debt, a wrong wallet chain-ID on connect, a lender-share donation/inflation attack, and a lender-share pricing-staleness gap) found and fixed pre-deployment, each with a reproducing regression test or live re-verification. |
+| Technical Quality (25%) | 57/57 Foundry tests, 3 independently-implemented SDKs with real anvil-deployment integration tests (not mocks), five real bugs (liquidation bad-debt, a wrong wallet chain-ID on connect, a lender-share donation/inflation attack, a lender-share pricing-staleness gap, and a bonus-rate inconsistency in `liquidate()`'s own collateral-exhausted branch introduced and caught within this same pass before shipping) found and fixed pre-deployment, each with a reproducing regression test or live re-verification. |
 | User Experience (15%) | Live public frontend, no login wall, real swap quotes and vault positions rendered end-to-end through the actual UI, not screenshots; `/vault`'s pool-level stats (including protocol reserves) render with zero wallet connection required. |
 | Mainnet Integration (15%) | **Honest gap — see below.** Oracle/explorer/RPC integration is against real QIE Mainnet contracts and endpoints today; the protocol's own contracts are not yet deployed to QIE Mainnet. |
-| Business Potential (15%) | A working DEX + money market is the single most load-bearing DeFi primitive a new L1 needs, and the vault's `reserveFactorBps` already gives the protocol a real on-chain revenue line (a configurable cut of every borrower's interest, withdrawable by `treasury`) rather than just passing 100% of it through to lenders — swap/LP/borrow activity plus that reserve capture are exactly the recurring, measurable usage *and* monetizable usage the hackathon's own traction milestones reward. |
+| Business Potential (15%) | A working DEX + money market is the single most load-bearing DeFi primitive a new L1 needs, and the vault's `reserveFactorBps` already gives the protocol a real on-chain revenue line (a configurable cut of every borrower's interest, withdrawable by `treasury`) rather than just passing 100% of it through to lenders — swap/LP/borrow activity plus that reserve capture are exactly the recurring, measurable usage *and* monetizable usage the hackathon's own traction milestones reward. The severity-scaled liquidation-bonus curve (`liquidationBonusMaxBps`) is a real risk-management maturity signal too: it directly reduces expected bad-debt losses (the single biggest tail risk to that same revenue line) by making sure the positions most likely to go unrecovered get liquidated fastest. |
 
 ## Honest current gaps (not hidden — this is what's still open)
 

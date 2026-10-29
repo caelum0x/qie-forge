@@ -87,7 +87,16 @@ contract DeployDemo is Script {
         // this demo's RATE_PER_SECOND_18 is 0 so no interest -- and
         // therefore no reserves -- actually accrues on this disposable
         // chain. `deployer` doubles as the demo treasury.
-        vault = new QieForgeVault(wqie, tusd, oracle, 7_500, 8_000, 500, 0, deployer, 1_000);
+        //
+        // Liquidation bonus: 5% at the curve's floor (barely underwater)
+        // scaling up to a real 20% once a position is deeply underwater
+        // (healthFactor <= 0.5) -- see QieForgeVault.liquidationBonusMaxBps.
+        // This demo's own open position stays healthy on purpose (judges
+        // browsing the live site should never see it as "about to be
+        // liquidated") -- the curve itself is proven against this exact
+        // deployed bytecode on a throwaway position on this same chain,
+        // see scripts/liquidation-curve-demo.mjs.
+        vault = new QieForgeVault(wqie, tusd, oracle, 7_500, 8_000, 500, 2_000, 0, deployer, 1_000);
 
         // Seed the vault with borrowable TUSD liquidity via a direct mint
         // rather than deposit(): this is deliberately a one-way ops/demo

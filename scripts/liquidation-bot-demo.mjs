@@ -12,8 +12,10 @@
 //   3. Poll the vault's real on-chain healthFactor() the way a real
 //      liquidation bot would, detect the position is now < 1.0 (unhealthy).
 //   4. Execute a REAL liquidate() transaction from a separate "bot"
-//      account, repaying debt and seizing collateral + the liquidation
-//      bonus, exactly as QieForgeVault.sol implements it.
+//      account, repaying debt and seizing collateral + the real,
+//      severity-scaled liquidation bonus (read live via
+//      liquidationBonusBpsFor, not assumed), exactly as
+//      QieForgeVault.sol implements it.
 //   5. Re-read on-chain state and print a before/after summary proving
 //      the debt shrank, the position's health factor recovered, and the
 //      bot's WQIE balance grew by the real seized collateral.
@@ -80,6 +82,11 @@ const vaultAbi = [
   { type: "function", name: "currentDebt", stateMutability: "view", inputs: [{ name: "user", type: "address" }], outputs: [{ type: "uint256" }] },
   { type: "function", name: "positions", stateMutability: "view", inputs: [{ name: "user", type: "address" }], outputs: [{ name: "collateral", type: "uint128" }, { name: "debtPrincipal", type: "uint128" }, { name: "lastAccrual", type: "uint64" }] },
   { type: "function", name: "liquidate", stateMutability: "nonpayable", inputs: [{ name: "user", type: "address" }, { name: "repayAmount", type: "uint256" }], outputs: [] },
+  // Severity-scaled liquidation bonus this exact position would pay right
+  // now (QieForgeVault.liquidationBonusMaxBps, added 2026-10-29) -- read
+  // live instead of assuming the old flat rate, since the real bonus a
+  // liquidator earns now depends on how underwater the position is.
+  { type: "function", name: "liquidationBonusBpsFor", stateMutability: "view", inputs: [{ name: "user", type: "address" }], outputs: [{ type: "uint256" }] },
 ];
 
 const oracleAbi = [
@@ -155,7 +162,17 @@ async function main() {
   if (underwater.hf >= 10n ** 18n) {
     throw new Error("Position did not go underwater after the price crash — adjust CRASHED_WQIE_PRICE_8DP.");
   }
-  console.log(`\n  >>> Bot decision: healthFactor ${fmtHf(underwater.hf)} < 1.0 — position is liquidatable. Executing liquidate(). <<<`);
+  const liveBonusBps = await publicClient.readContract({
+    address: vaultAddress,
+    abi: vaultAbi,
+    functionName: "liquidationBonusBpsFor",
+    args: [borrowerAccount.address],
+  });
+  console.log(
+    `\n  >>> Bot decision: healthFactor ${fmtHf(underwater.hf)} < 1.0 — position is liquidatable at a real, ` +
+      `severity-scaled ${(Number(liveBonusBps) / 100).toFixed(2)}% bonus (QieForgeVault.liquidationBonusBpsFor, ` +
+      `not a flat rate). Executing liquidate(). <<<`,
+  );
 
   // --- Step 4: fund the bot with TUSD to repay (borrower -> bot, a real transfer), then liquidate. ---
   const repayAmount = underwater.debt; // repay the full outstanding debt in one shot
@@ -191,7 +208,10 @@ async function main() {
   const debtRepaid = underwater.debt - after.debt;
   console.log(`\n== Result ==`);
   console.log(`  Debt repaid by bot:       ${formatUnits(debtRepaid, 6)} TUSD`);
-  console.log(`  Collateral seized by bot: ${formatUnits(seizedWqie, 18)} WQIE (includes the 5% liquidation bonus)`);
+  console.log(
+    `  Collateral seized by bot: ${formatUnits(seizedWqie, 18)} WQIE (includes the real, severity-scaled ` +
+      `${(Number(liveBonusBps) / 100).toFixed(2)}% bonus read live above — not a flat rate)`,
+  );
   console.log(`  Borrower healthFactor:    ${fmtHf(underwater.hf)} -> ${fmtHf(after.hf)}`);
 
   if (seizedWqie <= 0n) throw new Error("Liquidation did not transfer any collateral to the bot — something is wrong.");

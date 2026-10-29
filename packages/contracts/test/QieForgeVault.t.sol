@@ -21,6 +21,7 @@ contract QieForgeVaultTest is Test {
     uint256 constant LTV_BPS = 7_500;
     uint256 constant LIQ_THRESHOLD_BPS = 8_000;
     uint256 constant LIQ_BONUS_BPS = 500;
+    uint256 constant LIQ_BONUS_MAX_BPS_FLAT = 500; // == LIQ_BONUS_BPS -- curve disabled, exact pre-existing flat behavior
     uint256 constant RATE_PER_SECOND_18 = 1_585_489_599; // ≈ 5% APR
     uint256 constant BPS_DENOMINATOR = 10_000;
     address constant TREASURY = address(0x7EA5027);
@@ -44,6 +45,7 @@ contract QieForgeVaultTest is Test {
             LTV_BPS,
             LIQ_THRESHOLD_BPS,
             LIQ_BONUS_BPS,
+            LIQ_BONUS_MAX_BPS_FLAT,
             RATE_PER_SECOND_18,
             TREASURY,
             ZERO_RESERVE_FACTOR_BPS
@@ -335,6 +337,7 @@ contract QieForgeVaultTest is Test {
             LTV_BPS,
             LIQ_THRESHOLD_BPS,
             LIQ_BONUS_BPS,
+            LIQ_BONUS_MAX_BPS_FLAT,
             RATE_PER_SECOND_18,
             TREASURY,
             ZERO_RESERVE_FACTOR_BPS
@@ -401,6 +404,7 @@ contract QieForgeVaultTest is Test {
             LTV_BPS,
             LIQ_THRESHOLD_BPS,
             LIQ_BONUS_BPS,
+            LIQ_BONUS_MAX_BPS_FLAT,
             RATE_PER_SECOND_18,
             TREASURY,
             ZERO_RESERVE_FACTOR_BPS
@@ -429,6 +433,7 @@ contract QieForgeVaultTest is Test {
             LTV_BPS,
             LIQ_THRESHOLD_BPS,
             LIQ_BONUS_BPS,
+            LIQ_BONUS_MAX_BPS_FLAT,
             RATE_PER_SECOND_18,
             TREASURY,
             ZERO_RESERVE_FACTOR_BPS
@@ -455,6 +460,7 @@ contract QieForgeVaultTest is Test {
             LTV_BPS,
             LIQ_THRESHOLD_BPS,
             LIQ_BONUS_BPS,
+            LIQ_BONUS_MAX_BPS_FLAT,
             RATE_PER_SECOND_18,
             TREASURY,
             ZERO_RESERVE_FACTOR_BPS
@@ -487,6 +493,7 @@ contract QieForgeVaultTest is Test {
             LTV_BPS,
             LIQ_THRESHOLD_BPS,
             LIQ_BONUS_BPS,
+            LIQ_BONUS_MAX_BPS_FLAT,
             RATE_PER_SECOND_18,
             TREASURY,
             ZERO_RESERVE_FACTOR_BPS
@@ -538,6 +545,7 @@ contract QieForgeVaultTest is Test {
             LTV_BPS,
             LIQ_THRESHOLD_BPS,
             LIQ_BONUS_BPS,
+            LIQ_BONUS_MAX_BPS_FLAT,
             RATE_PER_SECOND_18,
             TREASURY,
             ZERO_RESERVE_FACTOR_BPS
@@ -587,6 +595,7 @@ contract QieForgeVaultTest is Test {
             LTV_BPS,
             LIQ_THRESHOLD_BPS,
             LIQ_BONUS_BPS,
+            LIQ_BONUS_MAX_BPS_FLAT,
             RATE_PER_SECOND_18,
             TREASURY,
             ZERO_RESERVE_FACTOR_BPS
@@ -654,6 +663,7 @@ contract QieForgeVaultTest is Test {
             LTV_BPS,
             LIQ_THRESHOLD_BPS,
             LIQ_BONUS_BPS,
+            LIQ_BONUS_MAX_BPS_FLAT,
             RATE_PER_SECOND_18,
             TREASURY,
             RESERVE_FACTOR_BPS
@@ -663,7 +673,7 @@ contract QieForgeVaultTest is Test {
     function test_constructor_revertsOnReserveFactorAboveOneHundredPercent() public {
         vm.expectRevert(QieForgeVault.InvalidReserveFactor.selector);
         new QieForgeVault(
-            collateral, borrowToken, oracle, LTV_BPS, LIQ_THRESHOLD_BPS, LIQ_BONUS_BPS, RATE_PER_SECOND_18, TREASURY, 10_001
+            collateral, borrowToken, oracle, LTV_BPS, LIQ_THRESHOLD_BPS, LIQ_BONUS_BPS, LIQ_BONUS_MAX_BPS_FLAT, RATE_PER_SECOND_18, TREASURY, 10_001
         );
     }
 
@@ -676,6 +686,7 @@ contract QieForgeVaultTest is Test {
             LTV_BPS,
             LIQ_THRESHOLD_BPS,
             LIQ_BONUS_BPS,
+            LIQ_BONUS_MAX_BPS_FLAT,
             RATE_PER_SECOND_18,
             address(0),
             ZERO_RESERVE_FACTOR_BPS
@@ -825,5 +836,150 @@ contract QieForgeVaultTest is Test {
         assertEq(vault.reserveFactorBps(), 0);
         assertEq(vault.protocolReserves(), 0);
         assertEq(vault.totalReserves(), 0);
+    }
+
+    // ---------------------------------------------------------------- //
+    // Liquidation incentive curve (severity-scaled liquidation bonus)
+    // ---------------------------------------------------------------- //
+
+    uint256 constant LIQ_BONUS_MAX_BPS_CURVE = 2_000; // 20% once deeply underwater
+
+    function _newVaultWithLiquidationCurve() internal returns (QieForgeVault) {
+        return new QieForgeVault(
+            collateral,
+            borrowToken,
+            oracle,
+            LTV_BPS,
+            LIQ_THRESHOLD_BPS,
+            LIQ_BONUS_BPS,
+            LIQ_BONUS_MAX_BPS_CURVE,
+            RATE_PER_SECOND_18,
+            TREASURY,
+            ZERO_RESERVE_FACTOR_BPS
+        );
+    }
+
+    function test_constructor_revertsOnLiquidationBonusMaxBelowBase() public {
+        vm.expectRevert(QieForgeVault.InvalidLiquidationBonusCurve.selector);
+        new QieForgeVault(
+            collateral,
+            borrowToken,
+            oracle,
+            LTV_BPS,
+            LIQ_THRESHOLD_BPS,
+            LIQ_BONUS_BPS,
+            LIQ_BONUS_BPS - 1, // max below base -- malformed curve
+            RATE_PER_SECOND_18,
+            TREASURY,
+            ZERO_RESERVE_FACTOR_BPS
+        );
+    }
+
+    function test_constructor_revertsOnLiquidationBonusMaxAboveOneHundredPercent() public {
+        vm.expectRevert(QieForgeVault.InvalidLiquidationBonusCurve.selector);
+        new QieForgeVault(
+            collateral,
+            borrowToken,
+            oracle,
+            LTV_BPS,
+            LIQ_THRESHOLD_BPS,
+            LIQ_BONUS_BPS,
+            BPS_DENOMINATOR + 1,
+            RATE_PER_SECOND_18,
+            TREASURY,
+            ZERO_RESERVE_FACTOR_BPS
+        );
+    }
+
+    /// @notice `vault` (from setUp) sets liquidationBonusMaxBps ==
+    /// liquidationBonusBps -- the explicit "curve disabled" configuration.
+    /// Regardless of how underwater a position gets, the bonus must stay
+    /// pinned to the flat base rate, exactly the behavior every other
+    /// liquidation test in this file (all written before this feature
+    /// existed) already assumes and asserts numerically.
+    function test_liquidationBonus_isFlat_whenMaxEqualsBase() public {
+        vm.startPrank(borrower);
+        vault.depositCollateral(1_000e18);
+        vault.borrow(700e6);
+        vm.stopPrank();
+
+        collateralFeed.setAnswer(80_000_000); // $0.80 -- mildly underwater
+        assertEq(vault.liquidationBonusBpsFor(borrower), LIQ_BONUS_BPS);
+
+        collateralFeed.setAnswer(1_000_000); // $0.01 -- deeply underwater
+        assertEq(vault.liquidationBonusBpsFor(borrower), LIQ_BONUS_BPS);
+    }
+
+    /// @notice A healthy position (or one with no debt at all) has nothing
+    /// to liquidate, so `liquidationBonusBpsFor` reports the flat base rate
+    /// rather than reverting -- a risk dashboard polling this for every
+    /// position should always get a number back.
+    function test_liquidationBonusBpsFor_returnsBaseBonus_whenNotLiquidatable() public {
+        assertEq(vault.liquidationBonusBpsFor(borrower), LIQ_BONUS_BPS, "no position at all");
+
+        vm.startPrank(borrower);
+        vault.depositCollateral(1_000e18);
+        vault.borrow(700e6);
+        vm.stopPrank();
+
+        assertEq(vault.liquidationBonusBpsFor(borrower), LIQ_BONUS_BPS, "healthy position");
+    }
+
+    /// @notice The real gap this feature closes: before it, a liquidator
+    /// had zero extra incentive to rush a severely underwater position
+    /// (the one actually at risk of becoming unrecoverable bad debt) over
+    /// a barely-underwater one -- both paid the exact same flat bonus. With
+    /// the curve, a mildly underwater position pays close to the base
+    /// rate, and a deeply underwater one (healthFactor <= 0.5, the curve's
+    /// floor) pays the full `liquidationBonusMaxBps`, in between
+    /// interpolated linearly. All three numbers below are exact, closed-
+    /// form values derived from `_liquidationBonusBps`'s own formula (not
+    /// approximations), so this also doubles as a regression test against
+    /// the formula itself.
+    function test_liquidationBonus_scalesWithSeverity_andActualLiquidateMatchesIt() public {
+        QieForgeVault curveVault = _newVaultWithLiquidationCurve();
+
+        borrowToken.mint(address(curveVault), 1_000_000e6);
+        vm.startPrank(borrower);
+        collateral.approve(address(curveVault), type(uint256).max);
+        curveVault.depositCollateral(1_000e18);
+        curveVault.borrow(700e6);
+        vm.stopPrank();
+
+        // Mildly underwater: healthFactor == 32/35 ≈ 0.9143, well above the
+        // 0.5 curve floor -- bonus must sit strictly between the base and
+        // max, not already be clamped to either end.
+        collateralFeed.setAnswer(80_000_000); // $0.80
+        uint256 mildHf = curveVault.healthFactor(borrower);
+        assertLt(mildHf, 1e18);
+        assertGt(mildHf, 5e17);
+        uint256 mildBonus = curveVault.liquidationBonusBpsFor(borrower);
+        assertEq(mildBonus, 757, "exact closed-form interpolation at hf=32/35");
+        assertGt(mildBonus, LIQ_BONUS_BPS);
+        assertLt(mildBonus, LIQ_BONUS_MAX_BPS_CURVE);
+
+        // Deeply underwater: healthFactor == 12/35 ≈ 0.3429, at/below the
+        // 0.5 floor -- bonus must be clamped to exactly the max, not
+        // extrapolated past it.
+        collateralFeed.setAnswer(30_000_000); // $0.30
+        uint256 severeHf = curveVault.healthFactor(borrower);
+        assertLe(severeHf, 5e17);
+        uint256 severeBonus = curveVault.liquidationBonusBpsFor(borrower);
+        assertEq(severeBonus, LIQ_BONUS_MAX_BPS_CURVE, "clamped to the max once at/below the floor");
+        assertGt(severeBonus, mildBonus, "a more severely underwater position must pay a strictly higher bonus");
+
+        // Real liquidate() at the severe price must seize exactly the
+        // max-bonus-implied amount of collateral, not the flat base-bonus
+        // amount a pre-fix vault would have paid for the same repay.
+        uint256 liquidatorCollateralBefore = collateral.balanceOf(liquidator);
+        vm.startPrank(liquidator);
+        borrowToken.approve(address(curveVault), 100e6);
+        curveVault.liquidate(borrower, 100e6);
+        vm.stopPrank();
+
+        uint256 seized = collateral.balanceOf(liquidator) - liquidatorCollateralBefore;
+        // $100 repaid * 1.20 (max bonus) / $0.30 price = 400 WQIE exactly.
+        assertEq(seized, 400e18, "exact closed-form seize amount at the 20% max bonus");
+        assertEq(curveVault.currentDebt(borrower), 600e6);
     }
 }

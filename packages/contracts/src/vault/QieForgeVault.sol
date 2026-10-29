@@ -41,8 +41,28 @@ contract QieForgeVault is ReentrancyGuard {
     uint256 public immutable ltvBps;
     /// @notice Health-factor threshold below which a position is liquidatable. 8_000 = 80%.
     uint256 public immutable liquidationThresholdBps;
-    /// @notice Extra collateral (in USD value) a liquidator receives per unit of debt repaid. 500 = 5%.
+    /// @notice Extra collateral (in USD value) a liquidator receives per unit
+    /// of debt repaid, at the floor of the incentive curve (a position only
+    /// just barely underwater, healthFactor() just below 1.0). 500 = 5%.
     uint256 public immutable liquidationBonusBps;
+    /// @notice The liquidation bonus a position pays once it is at or below
+    /// `LIQUIDATION_BONUS_CURVE_FLOOR_HF` -- i.e. deeply underwater, not
+    /// just marginally. Every real position's bonus is linearly
+    /// interpolated between `liquidationBonusBps` (at healthFactor() == 1.0)
+    /// and this value (at healthFactor() <= the floor), via
+    /// `_dynamicLiquidationBonusBps`. Before this, QieForgeVault paid the exact
+    /// same flat bonus regardless of how underwater a position was -- a
+    /// real gap: a liquidator weighing gas cost + price-impact-on-exit risk
+    /// has no extra reason to rush a severely underwater position (the one
+    /// that actually risks turning into unrecoverable bad debt the longer
+    /// it sits) over a barely-underwater one, which is exactly backwards
+    /// from the incentive a protocol wants. Real money markets (e.g.
+    /// Aave's "close factor"-adjacent liquidation bonus curves, Euler's
+    /// discount curve) scale the incentive with severity for this reason.
+    /// Set equal to `liquidationBonusBps` to disable the curve entirely
+    /// (flat bonus, the exact pre-existing behavior) -- see
+    /// `test_liquidationBonus_isFlat_whenMaxEqualsBase`.
+    uint256 public immutable liquidationBonusMaxBps;
     /// @notice Simple per-second borrow interest rate, scaled 1e18 (e.g. 5% APR ≈ 5e16 / 365 days).
     uint256 public immutable ratePerSecond18;
 
@@ -67,6 +87,14 @@ contract QieForgeVault is ReentrancyGuard {
 
     uint256 private constant BPS_DENOMINATOR = 10_000;
     uint256 private constant WAD = 1e18;
+
+    /// @notice Health factor (WAD-scaled) at or below which the liquidation
+    /// incentive curve maxes out at `liquidationBonusMaxBps`. 5e17 = 0.5 --
+    /// i.e. a position whose collateral, at the liquidation threshold, is
+    /// worth half its debt or less. Between this floor and 1.0 (the
+    /// liquidatable threshold itself), the bonus scales linearly -- see
+    /// `_dynamicLiquidationBonusBps`.
+    uint256 private constant LIQUIDATION_BONUS_CURVE_FLOOR_HF = 5e17;
 
     /// @notice Lender shares locked forever on the first-ever deposit() call
     /// made into a vault that already has nonzero totalAssets() (idle
@@ -160,6 +188,7 @@ contract QieForgeVault is ReentrancyGuard {
     error InvalidReserveFactor();
     error InsufficientReserves();
     error ZeroTreasury();
+    error InvalidLiquidationBonusCurve();
 
     constructor(
         IERC20 _collateralAsset,
@@ -168,18 +197,29 @@ contract QieForgeVault is ReentrancyGuard {
         uint256 _ltvBps,
         uint256 _liquidationThresholdBps,
         uint256 _liquidationBonusBps,
+        uint256 _liquidationBonusMaxBps,
         uint256 _ratePerSecond18,
         address _treasury,
         uint256 _reserveFactorBps
     ) {
         if (_reserveFactorBps > BPS_DENOMINATOR) revert InvalidReserveFactor();
         if (_treasury == address(0)) revert ZeroTreasury();
+        // Must be a well-formed curve: the "max" end can never pay less
+        // than the "base" end (equal is the valid, explicit way to disable
+        // the curve entirely), and neither end may exceed 100% -- an
+        // unbounded bonus could let a liquidator claim more collateral
+        // value than the debt it is repaying is worth, past a certain
+        // point, for a position that still has collateral left to seize.
+        if (_liquidationBonusMaxBps < _liquidationBonusBps || _liquidationBonusMaxBps > BPS_DENOMINATOR) {
+            revert InvalidLiquidationBonusCurve();
+        }
         collateralAsset = _collateralAsset;
         borrowAsset = _borrowAsset;
         oracle = _oracle;
         ltvBps = _ltvBps;
         liquidationThresholdBps = _liquidationThresholdBps;
         liquidationBonusBps = _liquidationBonusBps;
+        liquidationBonusMaxBps = _liquidationBonusMaxBps;
         ratePerSecond18 = _ratePerSecond18;
         treasury = _treasury;
         reserveFactorBps = _reserveFactorBps;
@@ -291,6 +331,41 @@ contract QieForgeVault is ReentrancyGuard {
         if (debtValue == 0) return type(uint256).max;
 
         return (collateralValue * liquidationThresholdBps * WAD) / (debtValue * BPS_DENOMINATOR);
+    }
+
+    /// @dev Linearly interpolates the liquidation bonus between
+    /// `liquidationBonusBps` (at `hf == WAD`, the liquidatable boundary
+    /// itself) and `liquidationBonusMaxBps` (at `hf <= LIQUIDATION_BONUS_
+    /// CURVE_FLOOR_HF`, deeply underwater). Callers only ever invoke this
+    /// with `hf < WAD` (every call site already reverts `PositionHealthy`
+    /// above that), so `distanceFromHealthy` never underflows. When
+    /// `liquidationBonusMaxBps == liquidationBonusBps` (the curve disabled)
+    /// this always returns the same flat value regardless of `hf`, the
+    /// exact pre-existing behavior.
+    function _dynamicLiquidationBonusBps(uint256 hf) internal view returns (uint256) {
+        if (liquidationBonusMaxBps == liquidationBonusBps) return liquidationBonusBps;
+        if (hf <= LIQUIDATION_BONUS_CURVE_FLOOR_HF) return liquidationBonusMaxBps;
+
+        uint256 distanceFromHealthy = WAD - hf;
+        uint256 range = WAD - LIQUIDATION_BONUS_CURVE_FLOOR_HF;
+        uint256 extra = ((liquidationBonusMaxBps - liquidationBonusBps) * distanceFromHealthy) / range;
+        return liquidationBonusBps + extra;
+    }
+
+    /// @notice The liquidation bonus (bps) a liquidator would receive on
+    /// `user`'s position right now, at its current on-chain health factor
+    /// -- the real number a liquidation bot (see
+    /// scripts/liquidation-bot-demo.mjs) or the frontend's risk dashboard
+    /// should read to decide whether/how urgently to act, instead of
+    /// assuming the old flat `liquidationBonusBps`. Returns the flat base
+    /// bonus for a healthy or debt-free position (matching `liquidate()`'s
+    /// own revert condition -- there is nothing to liquidate, so the curve
+    /// is moot) rather than reverting, so a dashboard can always render a
+    /// number.
+    function liquidationBonusBpsFor(address user) external view returns (uint256) {
+        uint256 hf = healthFactor(user);
+        if (hf >= WAD) return liquidationBonusBps;
+        return _dynamicLiquidationBonusBps(hf);
     }
 
     // ---------------------------------------------------------------- //
@@ -458,23 +533,35 @@ contract QieForgeVault is ReentrancyGuard {
 
     /// @notice Anyone may liquidate an unhealthy position by repaying up to
     /// its full debt and receiving collateral worth `repayAmount *
-    /// (1 + liquidationBonusBps)` in USD terms, at current oracle prices.
-    /// If the position's collateral is fully exhausted by the seizure, the
-    /// repay amount is capped down to what that collateral actually covers
-    /// (at the bonus rate) and any remaining debt is written off — debt and
-    /// collateral always reach zero together, never debt-with-no-collateral.
+    /// (1 + bonusBps)` in USD terms, at current oracle prices, where
+    /// `bonusBps` is `_dynamicLiquidationBonusBps(healthFactor(user))` -- scaling
+    /// from `liquidationBonusBps` up to `liquidationBonusMaxBps` the more
+    /// underwater the position is, not a flat rate. If the position's
+    /// collateral is fully exhausted by the seizure, the repay amount is
+    /// capped down to what that collateral actually covers (at that same
+    /// severity-scaled bonus rate) and any remaining debt is written off —
+    /// debt and collateral always reach zero together, never
+    /// debt-with-no-collateral.
     function liquidate(address user, uint256 repayAmount) external nonReentrant {
         Position storage pos = positions[user];
         uint256 debt = _accrue(pos);
         if (debt == 0) revert NothingToLiquidate();
-        if (healthFactor(user) >= WAD) revert PositionHealthy();
+        uint256 hf = healthFactor(user);
+        if (hf >= WAD) revert PositionHealthy();
         if (repayAmount > debt) repayAmount = debt;
+
+        // Severity-scaled bonus, not a flat rate: a position deep enough
+        // underwater to risk becoming bad debt pays up to
+        // `liquidationBonusMaxBps`, while one only just barely liquidatable
+        // pays close to the `liquidationBonusBps` floor -- see
+        // `_dynamicLiquidationBonusBps`.
+        uint256 bonusBps = _dynamicLiquidationBonusBps(hf);
 
         uint256 collateralPrice18 = oracle.getPriceUsd18(address(collateralAsset));
         uint256 borrowPrice18 = oracle.getPriceUsd18(address(borrowAsset));
 
         uint256 repayValueUsd = _usdValue(repayAmount, borrowDecimals, borrowPrice18);
-        uint256 seizeValueUsd = (repayValueUsd * (BPS_DENOMINATOR + liquidationBonusBps)) / BPS_DENOMINATOR;
+        uint256 seizeValueUsd = (repayValueUsd * (BPS_DENOMINATOR + bonusBps)) / BPS_DENOMINATOR;
         uint256 seizeCollateral = (seizeValueUsd * (10 ** collateralDecimals)) / collateralPrice18;
 
         uint256 badDebt;
@@ -486,7 +573,7 @@ contract QieForgeVault is ReentrancyGuard {
             // on a position with zero collateral behind it.
             seizeCollateral = pos.collateral;
             uint256 seizedValueUsd = _usdValue(seizeCollateral, collateralDecimals, collateralPrice18);
-            uint256 coveredValueUsd = (seizedValueUsd * BPS_DENOMINATOR) / (BPS_DENOMINATOR + liquidationBonusBps);
+            uint256 coveredValueUsd = (seizedValueUsd * BPS_DENOMINATOR) / (BPS_DENOMINATOR + bonusBps);
             uint256 coveredRepay = (coveredValueUsd * (10 ** borrowDecimals)) / borrowPrice18;
             if (coveredRepay < repayAmount) repayAmount = coveredRepay;
             badDebt = debt - repayAmount;

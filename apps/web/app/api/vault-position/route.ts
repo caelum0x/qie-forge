@@ -17,16 +17,35 @@ export async function GET(req: NextRequest) {
 
   try {
     const client = getPublicClient();
-    const [position, healthFactor, currentDebt, lenderShares, totalLenderShares, totalAssets, totalDebtPrincipal] =
-      await Promise.all([
-        client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "positions", args: [user] }),
-        client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "healthFactor", args: [user] }),
-        client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "currentDebt", args: [user] }),
-        client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "lenderShares", args: [user] }),
-        client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "totalLenderShares" }),
-        client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "totalAssets" }),
-        client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "totalDebtPrincipal" }),
-      ]);
+    const [
+      position,
+      healthFactor,
+      currentDebt,
+      lenderShares,
+      totalLenderShares,
+      totalAssets,
+      totalDebtPrincipal,
+      liquidationBonusBps,
+    ] = await Promise.all([
+      client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "positions", args: [user] }),
+      client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "healthFactor", args: [user] }),
+      client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "currentDebt", args: [user] }),
+      client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "lenderShares", args: [user] }),
+      client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "totalLenderShares" }),
+      client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "totalAssets" }),
+      client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "totalDebtPrincipal" }),
+      // Severity-scaled liquidation bonus this exact position would pay a
+      // liquidator right now (QieForgeVault.liquidationBonusMaxBps) — the
+      // real, current incentive rate, not the old flat
+      // `liquidationBonusBps` the frontend never actually surfaced before
+      // this feature existed.
+      client.readContract({
+        address: vaultAddress,
+        abi: VAULT_ABI,
+        functionName: "liquidationBonusBpsFor",
+        args: [user],
+      }),
+    ]);
     const [collateral, debtPrincipal, lastAccrual] = position as [bigint, bigint, bigint];
 
     return NextResponse.json({
@@ -41,6 +60,7 @@ export async function GET(req: NextRequest) {
       totalLenderShares: (totalLenderShares as bigint).toString(),
       totalAssets: (totalAssets as bigint).toString(),
       totalDebtPrincipal: (totalDebtPrincipal as bigint).toString(),
+      liquidationBonusBps: (liquidationBonusBps as bigint).toString(),
     });
   } catch (err) {
     return NextResponse.json(

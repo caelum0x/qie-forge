@@ -99,10 +99,10 @@ documented honestly either way, not just when we found something.
 | Criterion | Weight | QIE Forge |
 |---|---|---|
 | Innovation | 30% | Clean-room AMM + lending vault, built around an independently-discovered oracle-docs bug most entrants would copy blindly. |
-| Technical Quality | 25% | 52/52 contract tests, 3 independent SDKs with real anvil-integration tests, three real security bugs (liquidation bad-debt, lender-share donation/inflation attack, lender-share pricing staleness) found and fixed pre-deployment, each with a reproducing regression test. |
+| Technical Quality | 25% | 57/57 contract tests, 3 independent SDKs with real anvil-integration tests, four real security bugs (liquidation bad-debt, lender-share donation/inflation attack, lender-share pricing staleness, a bonus-rate inconsistency in the liquidation-curve work caught in the same pass) found and fixed pre-deployment, each with a reproducing regression test. |
 | User Experience | 15% | Live public frontend, real swap/vault flows working end-to-end, no login wall. |
 | Mainnet Integration | 15% | Oracle/RPC/explorer integration is real and QIE-Mainnet-verified today; the protocol's own contract deployment to QIE Mainnet is the one open gap (see below). |
-| Business Potential | 15% | A DEX + money market is the load-bearing DeFi primitive QIE doesn't have yet, and the vault now has a real on-chain revenue line (`reserveFactorBps`, a configurable cut of borrower interest withdrawable by `treasury`) on top of the recurring swap/LP/borrow activity the hackathon's traction milestones reward. |
+| Business Potential | 15% | A DEX + money market is the load-bearing DeFi primitive QIE doesn't have yet, and the vault now has a real on-chain revenue line (`reserveFactorBps`, a configurable cut of borrower interest withdrawable by `treasury`) plus a severity-scaled liquidation incentive curve (`liquidationBonusMaxBps`) that reduces expected bad-debt losses against that revenue — on top of the recurring swap/LP/borrow activity the hackathon's traction milestones reward. |
 
 ## What's honestly still open
 

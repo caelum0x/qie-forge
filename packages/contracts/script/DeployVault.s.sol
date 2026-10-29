@@ -58,7 +58,8 @@ contract DeployVault is Script {
     /// any of these via env if the real launch wants different risk params.
     uint256 internal constant DEFAULT_LTV_BPS = 7_500; // 75%
     uint256 internal constant DEFAULT_LIQUIDATION_THRESHOLD_BPS = 8_000; // 80%
-    uint256 internal constant DEFAULT_LIQUIDATION_BONUS_BPS = 500; // 5%
+    uint256 internal constant DEFAULT_LIQUIDATION_BONUS_BPS = 500; // 5% at the curve's floor (barely underwater)
+    uint256 internal constant DEFAULT_LIQUIDATION_BONUS_MAX_BPS = 2_000; // 20% once deeply underwater (healthFactor <= 0.5)
     uint256 internal constant DEFAULT_RATE_PER_SECOND_18 = 1_585_489_599; // ~5% APR
     uint256 internal constant DEFAULT_RESERVE_FACTOR_BPS = 1_000; // 10% of interest to protocol treasury
 
@@ -87,6 +88,8 @@ contract DeployVault is Script {
         uint256 liquidationThresholdBps =
             vm.envOr("QIE_FORGE_VAULT_LIQUIDATION_THRESHOLD_BPS", DEFAULT_LIQUIDATION_THRESHOLD_BPS);
         uint256 liquidationBonusBps = vm.envOr("QIE_FORGE_VAULT_LIQUIDATION_BONUS_BPS", DEFAULT_LIQUIDATION_BONUS_BPS);
+        uint256 liquidationBonusMaxBps =
+            vm.envOr("QIE_FORGE_VAULT_LIQUIDATION_BONUS_MAX_BPS", DEFAULT_LIQUIDATION_BONUS_MAX_BPS);
         uint256 ratePerSecond18 = vm.envOr("QIE_FORGE_VAULT_RATE_PER_SECOND_18", DEFAULT_RATE_PER_SECOND_18);
         uint256 reserveFactorBps = vm.envOr("QIE_FORGE_VAULT_RESERVE_FACTOR_BPS", DEFAULT_RESERVE_FACTOR_BPS);
 
@@ -98,6 +101,7 @@ contract DeployVault is Script {
             ltvBps,
             liquidationThresholdBps,
             liquidationBonusBps,
+            liquidationBonusMaxBps,
             ratePerSecond18,
             vaultTreasury,
             reserveFactorBps
@@ -111,6 +115,7 @@ contract DeployVault is Script {
         console.log("  ltvBps:", ltvBps);
         console.log("  liquidationThresholdBps:", liquidationThresholdBps);
         console.log("  liquidationBonusBps:", liquidationBonusBps);
+        console.log("  liquidationBonusMaxBps:", liquidationBonusMaxBps);
         console.log("  ratePerSecond18:", ratePerSecond18);
         console.log("  treasury:", vaultTreasury);
         console.log("  reserveFactorBps:", reserveFactorBps);

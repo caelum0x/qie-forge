@@ -7,6 +7,100 @@ you can re-run, and most have a live URL you can open right now.
 live testnet/mainnet block numbers and real QIE Oracle prices on every
 request — see "Built and verified: frontend" below).
 
+## 2026-10-29 (later): severity-scaled liquidation incentive curve shipped
+
+Real gap closed, distinct from the reserve-factor work above: before this,
+`QieForgeVault.liquidate()` paid every liquidator the exact same flat
+`liquidationBonusBps`, regardless of how underwater a position actually
+was. A liquidator weighing gas cost and exit-price risk had no extra
+incentive to rush the positions most likely to turn into unrecoverable
+bad debt (deeply underwater ones) over barely-underwater ones — exactly
+backwards from what a protocol wants, and a real risk-management gap next
+to the reserve-factor's revenue gap. Added an immutable
+`liquidationBonusMaxBps` and `_dynamicLiquidationBonusBps(hf)`: the bonus
+linearly interpolates from `liquidationBonusBps` (at `healthFactor() ==
+1.0`) up to `liquidationBonusMaxBps` (at `healthFactor() <= 0.5`, the
+curve's floor), clamped at both ends. Setting `liquidationBonusMaxBps ==
+liquidationBonusBps` disables the curve entirely (flat, the exact
+pre-existing behavior) — every one of the 29 pre-existing liquidation/vault
+tests passes unchanged under this default, zero numeric updates needed.
+A new `liquidationBonusBpsFor(user)` view exposes the real current rate to
+bots/dashboards without needing to simulate `liquidate()` itself.
+
+**A real bug found and fixed within this same pass, before any test ever
+exercised it**: `liquidate()`'s forward seize calculation was updated to
+use the new dynamic `bonusBps`, but the same function's "collateral is the
+binding constraint" branch still back-calculated `coveredValueUsd` using
+the old flat `liquidationBonusBps` — the two rates would have silently
+diverged for exactly the case most likely to hit that branch (a deeply
+underwater, collateral-exhausted position), corrupting the `badDebt`
+write-off amount. Caught by re-reading the diff, fixed before writing any
+test against it.
+
+**Verified two ways:**
+1. `forge test`: 5 new regression tests (constructor validation —
+   `InvalidLiquidationBonusCurve` on `max < base` and `max > 100%`; flat-
+   curve backward compatibility proven at two different underwater
+   severities on the exact `vault` instance every pre-existing liquidation
+   test already uses; `liquidationBonusBpsFor` returning the base rate for
+   a healthy/debt-free position instead of reverting; and the curve's own
+   exact closed-form math — 757bps at a mild `healthFactor` of 32/35,
+   clamped to the 2,000bps max at a severe `healthFactor` of 12/35, with a
+   real `liquidate()` call seizing the exact predicted 400 WQIE for a 100
+   TUSD repay at that clamped rate). **52 → 57/57 pass**, zero regressions
+   on the other 52.
+2. **Live, on the real self-hosted demo chain** (`http://130.61.180.42:8647`,
+   not just Foundry's test EVM): deployed a fresh, separate vault (base
+   500bps / max 2,000bps / 0.5 floor) via `forge create` so the public
+   demo's own open position stayed untouched, opened a real 1,000 WQIE /
+   700 TUSD position, and read `liquidationBonusBpsFor()` directly via
+   `cast call` at three real price points: healthy ($1.00) → `500` (base),
+   mildly underwater ($0.80, `healthFactor` 0.9143) → `757`, severely
+   underwater ($0.30, `healthFactor` 0.3429) → `2000` (clamped to max) —
+   exactly the closed-form values the new unit tests assert. Then executed
+   a real `liquidate()` transaction
+   (`0x1c92080631375be88588b7af96eb6a782ad17ca474a820cef50d0d5560ed7ec4`)
+   at the severe price: the liquidator's on-chain WQIE balance moved from
+   `0` to exactly `400000000000000000000` (400 WQIE) for a 100 TUSD repay —
+   the exact 20%-bonus prediction, proving the curve holds against real
+   chain state, not just Foundry's test EVM.
+
+**Redeployed the live public demo** (`DeployDemo.s.sol` now passes
+`liquidationBonusMaxBps` too — 5% floor / 20% max, matching
+`DeployVault.s.sol`'s mainnet-ready defaults) against the same persistent
+self-hosted anvil devnet, updated the 5 affected `NEXT_PUBLIC_QIE_FORGE_*`
+address env vars via the Vercel CLI (**and fixed a real latent bug found
+while doing so**: `vercel env add` via `echo "$VALUE" | vercel env add ...`
+had been silently baking a trailing newline into every one of those 5
+address values — `Address "0x...\n" is invalid` on every vault-position
+read until re-added with `printf '%s'` instead of `echo`; this had
+apparently gone unnoticed since whichever earlier redeploy introduced the
+pattern), and ran `vercel --prod`. Re-verified live after redeploy and
+after the env-var fix, not just assumed: `/`, `/swap`, `/pool`, `/vault`
+all HTTP 200; `/api/quote` for 1 WQIE → `139579` TUSD (matches every prior
+entry in this file exactly); `/api/vault-position` returns the same
+documented 500,000 WQIE / 20,000 TUSD / 2.8x health-factor position, now
+also with `liquidationBonusBps: "500"` (the correct base rate — this
+position is healthy). Separately re-ran the full one-command
+`scripts/liquidation-bot-demo.sh` end-to-end against the updated
+`DeployDemo.s.sol` on a fresh disposable local anvil: real `liquidate()`
+tx `0x25a2e80758f8ca0fb64dd0cac82044e9d8fa84047b7c657c4fb10884c704bfd1`
+seized `431020.41` WQIE at a real `560bps` (5.60%) bonus — correctly above
+the 500bps floor since that run's health factor (`0.98`) is only barely
+underwater, not the flat `5%` a pre-curve vault would have paid for the
+identical liquidation.
+
+`npm test` (33/33), `next build` (clean), `npx eslint .` on `apps/web`
+(clean) all re-run and pass. README.md/SUBMISSION.md/TEAM-PRESENTATION.md
+updated with the real current test count (57/57) and the new risk-curve
+story in the Business Potential / Technical Quality judging rows.
+
+**Owner-only blocker, unchanged, still the single remaining gate**: a
+funded QIE deployer wallet for the real Testnet/Mainnet broadcast — both
+genuine owner/operator steps, unautomatable from this environment.
+Everything up to and including that broadcast command is real, tested,
+and ready, same as every pass before this one.
+
 ## 2026-10-29: protocol reserve factor (real on-chain revenue mechanism) shipped
 
 Real gap closed: before this, 100% of borrower interest flowed to lender
@@ -170,11 +264,12 @@ file to `infra-box/caddy/sites/qie-forge-demo-rpc.caddy` and
 cd packages/contracts && forge test -vv
 ```
 
-**52/52 tests pass** across 4 suites (`QieOracleAdapter` 8, `QieForgeRouter`
-8, `QieForgeVault` 29, `QieForgePair` 7) — see the "2026-10-29: protocol
-reserve factor" section above for the 6 newest (the reserve-factor split,
-pending-vs-realized accounting, and `withdrawReserves` access control).
-Beyond the original 25 (constant-
+**57/57 tests pass** across 4 suites (`QieOracleAdapter` 8, `QieForgeRouter`
+8, `QieForgeVault` 34, `QieForgePair` 7) — see the "2026-10-29 (later):
+severity-scaled liquidation incentive curve" section above for the 5
+newest, and "2026-10-29: protocol reserve factor" for the 6 before that
+(the reserve-factor split, pending-vs-realized accounting, and
+`withdrawReserves` access control). Beyond the original 25 (constant-
 product invariants, LP math, fee accrual/protocol-fee switch, TWAP,
 slippage/deadline checks, oracle staleness/decimals handling, base
 LTV/health-factor/interest/liquidation), this pass added:

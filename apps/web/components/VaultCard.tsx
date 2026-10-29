@@ -13,6 +13,12 @@ interface Position {
   debtPrincipal: string;
   healthFactor: string;
   currentDebt: string;
+  /** Severity-scaled liquidation bonus (bps) this position would pay a
+   * liquidator right now — see QieForgeVault.liquidationBonusBpsFor. Rises
+   * the more underwater the position gets, up to `liquidationBonusMaxBps`,
+   * instead of a flat rate — a real early-warning signal, not just the
+   * health factor alone. */
+  liquidationBonusBps: string;
 }
 
 const WAD = 10n ** 18n;
@@ -128,6 +134,13 @@ export function VaultCard({
       : (Number(position.healthFactor) / Number(WAD)).toFixed(2)
     : "—";
   const isRisky = position && position.debtPrincipal !== "0" && BigInt(position.healthFactor) < WAD + WAD / 5n;
+  const isUnderwater = position && position.debtPrincipal !== "0" && BigInt(position.healthFactor) < WAD;
+  // Shown as "current rate if you were liquidated this instant" only once
+  // a position is actually underwater (liquidationBonusBpsFor() returns
+  // the flat base rate for a healthy position, which would be misleading
+  // to display as if it were a live warning signal otherwise).
+  const liquidationBonusDisplay =
+    position && isUnderwater ? `${(Number(position.liquidationBonusBps) / 100).toFixed(2)}%` : "—";
 
   return (
     <div className="card p-6 max-w-md">
@@ -148,6 +161,9 @@ export function VaultCard({
               value={position ? formatUnits(BigInt(position.currentDebt), borrowDecimals) : "—"}
             />
             <Stat label="Health factor" value={healthFactorDisplay} danger={Boolean(isRisky)} />
+            {isUnderwater && (
+              <Stat label="Liquidation bonus right now" value={liquidationBonusDisplay} danger />
+            )}
           </div>
 
           <ActionRow
