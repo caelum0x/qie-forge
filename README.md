@@ -128,6 +128,42 @@ route returned the exact same quote as a direct `cast call` to the
 deployed router. See [docs/STATUS.md](docs/STATUS.md) for the full detail,
 including the one honest gap (no real-browser wallet click-through test).
 
+## Liquidation bot demo (`scripts/liquidation-bot-demo.sh`)
+
+Judges can't watch a real mainnet liquidation happen (no funded wallet in
+this environment), so this is the next best thing: a one-command script
+that proves the vault's liquidation path end-to-end against real deployed
+bytecode, not a mock.
+
+```
+./scripts/liquidation-bot-demo.sh
+```
+
+What it actually does, every step a real on-chain call:
+
+1. Boots a disposable local anvil devnet and runs
+   `script/DeployDemo.s.sol` against it — the exact same script backing
+   the live frontend's demo deployment — which deploys the real
+   `QieForgeFactory`/`QieForgeRouter`/`QieOracleAdapter`/`QieForgeVault`
+   bytecode, seeds AMM liquidity, and opens one real borrower position
+   (500,000 WQIE collateral, 20,000 TUSD debt, health factor ~2.8).
+2. A separate "bot" account reads the real on-chain `healthFactor()` —
+   healthy.
+3. Crashes the WQIE collateral price ~65% via the mock oracle feed (the
+   one deliberately fake input — standing in for a real market move) and
+   polls `healthFactor()` again — now 0.98, underwater.
+4. The bot funds itself, approves, and sends a real `liquidate()`
+   transaction against the vault.
+5. Reads real on-chain state again and prints a before/after summary:
+   debt repaid, collateral + 5% bonus seized, health factor back to
+   healthy.
+
+Verified live, twice, same result both runs (2026-10-29):
+`20000 TUSD` debt repaid, `428571.43 WQIE` seized (bonus included),
+borrower health factor `0.98 -> ∞ (no debt)`, final `forge test`: 46/46
+still pass. See `scripts/liquidation-bot-demo.mjs` for the viem-based bot
+logic.
+
 ## Real findings from building this (2026-10-26)
 
 Everything below came from an actual `eth_call`/`eth_getCode`/HTTP request
