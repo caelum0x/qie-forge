@@ -48,7 +48,7 @@ derivation of its formulas).
 - **`QieForgePair`** — constant-product (`x*y=k`) pool, 30bps swap fee compounding into reserves, minimum-liquidity burn-lock, price-cumulative TWAP accumulators, ERC-20 LP shares.
 - **`QieForgeRouter`** — multi-hop swap routing, add/remove liquidity with slippage + deadline protection.
 - **`QieOracleAdapter`** — normalizes QIE's real on-chain price oracles (see below) into an 18-decimal USD price, fails closed if an asset has no configured feed or the price is stale.
-- **`QieForgeVault`** — over-collateralized borrowing against a single collateral asset: deposit, borrow up to an LTV cap *and* up to an aggregate `borrowCap` risk ceiling (independent of any one position's own collateralization — see `borrowCap`), real-time health-factor computation, permissionless liquidation with a severity-scaled liquidation bonus (linearly interpolated from `liquidationBonusBps` up to `liquidationBonusMaxBps` the more underwater a position is, not a flat rate — see `liquidationBonusBpsFor`), simple per-second interest accrual, lender deposit/withdraw share accounting, and a `reserveFactorBps` protocol revenue cut of borrower interest (withdrawable by an immutable `treasury` address) — a real on-chain revenue mechanism, not just working mechanics, the same primitives Compound/Aave/Euler each ship.
+- **`QieForgeVault`** — over-collateralized borrowing against a single collateral asset: deposit, borrow up to an LTV cap *and* up to an aggregate `borrowCap` risk ceiling (independent of any one position's own collateralization — see `borrowCap`), real-time health-factor computation, permissionless liquidation with a severity-scaled liquidation bonus (linearly interpolated from `liquidationBonusBps` up to `liquidationBonusMaxBps` the more underwater a position is, not a flat rate — see `liquidationBonusBpsFor`), simple per-second interest accrual, lender deposit/withdraw share accounting, and a `reserveFactorBps` protocol revenue cut of borrower interest (withdrawable by an immutable `treasury` address) — a real on-chain revenue mechanism, not just working mechanics, the same primitives Compound/Aave/Euler each ship. A bad-debt write-off in `liquidate()` is also clamped against already-realized `protocolReserves` so an extreme write-off can never push reserves above what the vault can actually back — see `protocolReserves`'s own doc comment.
 
 ```bash
 cd packages/contracts
@@ -57,7 +57,7 @@ forge build
 forge test -vv
 ```
 
-62/62 tests pass locally against Foundry's EVM (deterministic, no network
+64/64 tests pass locally against Foundry's EVM (deterministic, no network
 dependency), including 3-pool multi-hop routing, exact-output swaps, oracle
 staleness/decimals/rotation edge cases, liquidation edge cases (zero-debt,
 over-repay, partial liquidation, sequential liquidators, the severity-scaled
@@ -65,11 +65,14 @@ liquidation-bonus curve's constructor validation/flat-mode-backward-
 compatibility/exact-interpolation-and-clamp-to-max cases), lender
 deposit/withdraw share accounting, the protocol reserve-factor split
 (realized + pending reserve accounting, treasury-only withdrawal, 0%
-backward-compatible default), and the aggregate `borrowCap` risk ceiling
+backward-compatible default), the aggregate `borrowCap` risk ceiling
 (unlimited-by-default backward compatibility, exact-boundary success/
 revert, aggregate-across-multiple-borrowers, and interest-accrual-never-
-blocked-only-new-draws-are cases) — see [STATUS.md](docs/STATUS.md) for the
-actual `forge test` output.
+blocked-only-new-draws-are cases), and a bad-debt-write-off-vs-realized-
+reserves invariant (a full write-off that would otherwise push
+`protocolReserves` above what the vault can back is clamped, not left to
+underflow-revert `totalAssets()`/`deposit()`/`withdraw()` forever) — see
+[STATUS.md](docs/STATUS.md) for the actual `forge test` output.
 
 ## The SDK + CLI (`packages/core`, `packages/cli`)
 
@@ -257,10 +260,11 @@ real open gap.
 - **Built and verified live**: TypeScript, Python, and Rust SDKs + the CLI,
   all against real testnet/mainnet RPCs and the real oracle contracts.
 - **Built and verified locally**: the full AMM + lending vault contract
-  suite (62/62 Foundry tests, including a real protocol reserve-factor
+  suite (64/64 Foundry tests, including a real protocol reserve-factor
   (treasury revenue) feature, a severity-scaled liquidation-bonus curve,
-  and an aggregate `borrowCap` risk ceiling independent of per-position
-  LTV, all added 2026-10-29, plus a fix for a real `healthFactor()`
+  an aggregate `borrowCap` risk ceiling independent of per-position LTV,
+  and a bad-debt-write-off-vs-realized-reserves insolvency/DoS fix, all
+  added 2026-10-29, plus a fix for a real `healthFactor()`
   staleness bug — see docs/STATUS.md); both the Python and
   Rust SDKs' read/quote logic against a real local deployment of the actual
   contract bytecode (anvil); the frontend's quote/vault-position APIs

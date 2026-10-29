@@ -173,6 +173,20 @@ contract QieForgeVault is ReentrancyGuard {
     /// repo's `plans/qie-hackathon.md`, 2026-10-29 entry): a position left
     /// untouched would let lender shares price in 100% of its pending
     /// interest before any reserve cut was ever realized against it.
+    ///
+    /// Invariant this must never violate: `protocolReserves` can never
+    /// exceed `totalDebtPrincipal + borrowAsset.balanceOf(address(this))`
+    /// (the vault's only two sources of real backing), or `totalAssets()`'s
+    /// `idle + debt - totalReserves()` subtraction underflows and reverts
+    /// *every* call to `deposit()`/`withdraw()` forever -- permanently
+    /// freezing every lender's funds with no recovery path, since
+    /// `withdrawReserves` itself needs idle liquidity that may never
+    /// arrive. A real bad-debt write-off in `liquidate()` is the one path
+    /// that can break this invariant (it shrinks `totalDebtPrincipal` by
+    /// the full written-off amount without touching this realized-reserves
+    /// bucket at all) -- `liquidate()` clamps `protocolReserves` back down
+    /// to the vault's post-write-off backing the moment that happens. See
+    /// `test_liquidate_fullBadDebtWriteOff_doesNotBrickTotalAssets`.
     uint256 public protocolReserves;
 
     /// @notice Lender share accounting (ERC4626-style, internal — not a
@@ -198,6 +212,12 @@ contract QieForgeVault is ReentrancyGuard {
     event Deposited(address indexed lender, uint256 amount, uint256 shares);
     event Withdrawn(address indexed lender, uint256 amount, uint256 shares);
     event ReservesWithdrawn(address indexed treasury, uint256 amount);
+    /// @notice Emitted when a bad-debt write-off (see `liquidate`) forces a
+    /// haircut on already-*realized* `protocolReserves` because the written-
+    /// off debt removed more backing than the un-clamped reserves could
+    /// survive -- see `protocolReserves`'s own doc comment for why this
+    /// exists at all.
+    event ProtocolReservesWrittenOff(uint256 amount);
 
     error ZeroAmount();
     error InsufficientCollateral();
@@ -622,6 +642,31 @@ contract QieForgeVault is ReentrancyGuard {
 
         if (repayAmount > 0) borrowAsset.safeTransferFrom(msg.sender, address(this), repayAmount);
         if (seizeCollateral > 0) collateralAsset.safeTransfer(msg.sender, seizeCollateral);
+
+        if (badDebt > 0 && protocolReserves > 0) {
+            // badDebt just shrank totalDebtPrincipal -- the vault's real
+            // backing -- without touching protocolReserves above. Left
+            // unclamped, a write-off large enough (up to and including a
+            // position's entire debt, same as this branch always is) can
+            // push protocolReserves above what totalDebtPrincipal + the
+            // vault's idle borrowAsset balance can actually back, which
+            // makes every future totalAssets() call (and therefore every
+            // deposit()/withdraw()) underflow-revert forever -- permanently
+            // freezing every lender's funds, with no recovery path since
+            // withdrawReserves() itself needs idle liquidity that may never
+            // materialize. Clamp reserves down to what the vault can still
+            // actually back the moment bad debt removes that backing,
+            // taking the shortfall out of realized-but-unwithdrawn protocol
+            // revenue instead of bricking the entire lending side of the
+            // vault. See test_liquidate_fullBadDebtWriteOff_doesNotBrickTotalAssets.
+            uint256 backing = totalDebtPrincipal + borrowAsset.balanceOf(address(this));
+            if (protocolReserves > backing) {
+                uint256 reservesWrittenOff = protocolReserves - backing;
+                protocolReserves = backing;
+                emit ProtocolReservesWrittenOff(reservesWrittenOff);
+            }
+        }
+
         if (badDebt > 0) emit BadDebtWrittenOff(user, badDebt);
         emit Liquidated(user, msg.sender, repayAmount, seizeCollateral);
     }

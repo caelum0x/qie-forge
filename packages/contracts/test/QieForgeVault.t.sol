@@ -1174,4 +1174,188 @@ contract QieForgeVaultTest is Test {
         vm.stopPrank();
         assertEq(capped.currentDebt(borrower), 0);
     }
+
+    // ---------------------------------------------------------------- //
+    // Bad-debt write-off vs. realized protocol reserves (found 2026-10-29,
+    // distinct from the borrow-cap gap above)
+    // ---------------------------------------------------------------- //
+
+    /// @notice Reproduces a real insolvency/DoS gap: a bad-debt write-off in
+    /// `liquidate()` shrinks `totalDebtPrincipal` (the vault's real backing)
+    /// by the full written-off amount, but never touched the separate,
+    /// already-*realized* `protocolReserves` bucket. With a real nonzero
+    /// `reserveFactorBps` (every real deploy of this vault uses one — see
+    /// `DeployVault.s.sol`'s `DEFAULT_RESERVE_FACTOR_BPS`), a position whose
+    /// entire debt gets written off as bad debt can leave `protocolReserves`
+    /// larger than `totalDebtPrincipal + idle borrowAsset balance` combined
+    /// — the vault's only two sources of real backing. `totalAssets()`
+    /// computes `idle + debt - totalReserves()`; once `totalReserves()`
+    /// exceeds `idle + debt`, that subtraction underflows and reverts
+    /// *every single future call*, including every lender's `deposit()` and
+    /// `withdraw()` — permanently freezing all lender funds in the vault,
+    /// forever, since `withdrawReserves()` itself needs idle liquidity that
+    /// may never arrive once the vault is bricked this way.
+    function test_liquidate_fullBadDebtWriteOff_doesNotBrickTotalAssets() public {
+        QieForgeVault freshVault = _newVaultWithReserveFactor();
+
+        address lender = address(0x1E4DE2);
+        borrowToken.mint(lender, 700e6);
+        vm.startPrank(lender);
+        borrowToken.approve(address(freshVault), 700e6);
+        uint256 lenderShares = freshVault.deposit(700e6);
+        vm.stopPrank();
+
+        vm.startPrank(borrower);
+        collateral.approve(address(freshVault), type(uint256).max);
+        freshVault.depositCollateral(1_000e18);
+        freshVault.borrow(700e6); // fully utilizes the vault: idle == 0
+        vm.stopPrank();
+        assertEq(borrowToken.balanceOf(address(freshVault)), 0, "sanity: vault idle balance is zero");
+
+        // A full year of real interest accrual, so a real reserve-factor
+        // cut has something nonzero to realize once touched.
+        vm.warp(block.timestamp + 365 days);
+
+        // Crash the collateral price to effectively zero -- deeply enough
+        // underwater that seizing 100% of the borrower's collateral still
+        // covers only a negligible fraction of the debt, same mechanism
+        // test_liquidation_cannotSeizeMoreThanAvailableCollateral already
+        // exercises, just pushed to the point where badDebt is the entire
+        // position (not merely most of it). Also refresh borrowFeed's
+        // timestamp (same price, just un-stale it) since the 365-day warp
+        // above pushed both feeds past the oracle's 1-day maxStaleness.
+        collateralFeed.setAnswer(1); // $0.00000001
+        borrowFeed.setAnswer(1_00_000_000); // still $1.00, just un-stale
+        assertLt(freshVault.healthFactor(borrower), 1e18);
+
+        uint256 debtBefore = freshVault.currentDebt(borrower);
+        assertGt(debtBefore, 700e6, "sanity: real interest accrued");
+
+        vm.startPrank(liquidator);
+        borrowToken.approve(address(freshVault), debtBefore);
+        freshVault.liquidate(borrower, debtBefore); // _accrue() inside realizes protocolReserves first
+        vm.stopPrank();
+
+        // The position's debt and collateral both reached zero together --
+        // this really was a full write-off, not a partial one.
+        (uint128 remainingCollateral, uint128 remainingDebt,) = freshVault.positions(borrower);
+        assertEq(remainingCollateral, 0);
+        assertEq(remainingDebt, 0);
+        assertEq(freshVault.totalDebtPrincipal(), 0);
+
+        uint256 idleAfter = borrowToken.balanceOf(address(freshVault));
+
+        // Prove the invariant was genuinely at risk (not just defensively
+        // checked for no reason): replicate the exact reserve-factor
+        // realization `_accrue` performs on `interest` -- the real,
+        // unclamped amount `protocolReserves` would have held right after
+        // this liquidation's internal `_accrue(pos)` call, before
+        // `liquidate()`'s clamp brings it back down. That unclamped amount
+        // is nowhere near coverable by the tiny sliver of real repay the
+        // $0.00000001-valued collateral still produced.
+        uint256 interest = debtBefore - 700e6;
+        uint256 unclampedRealizedReserve = (interest * RESERVE_FACTOR_BPS) / BPS_DENOMINATOR;
+        assertGt(
+            unclampedRealizedReserve,
+            idleAfter,
+            "sanity: the invariant was genuinely at risk here (would have underflowed pre-fix)"
+        );
+        // And the clamp actually engaged: realized reserves now sit exactly
+        // at what the vault can back, not at the pre-clamp amount.
+        assertEq(freshVault.protocolReserves(), idleAfter);
+
+        // The real invariant: realized reserves can never exceed what the
+        // vault can actually back (debt + idle), post write-off.
+        assertLe(freshVault.protocolReserves(), freshVault.totalDebtPrincipal() + idleAfter);
+
+        // The real proof this isn't just an internal-accounting nicety:
+        // totalAssets() -- and therefore every lender's deposit()/withdraw()
+        // -- must still work, not underflow-revert, after this. Lenders
+        // correctly bear this badDebt first (down to zero, the same
+        // socialization the pre-existing design already documents) -- the
+        // clamp only ever takes the *excess* beyond that out of reserves,
+        // which is exactly why reserves landed at idleAfter (the leftover
+        // backing) rather than reserves staying untouched and totalAssets()
+        // going negative.
+        assertEq(freshVault.totalAssets(), 0);
+
+        // The lender's shares are now worth zero, but withdraw() itself
+        // must not revert (pre-fix, every call that touches totalAssets()
+        // -- deposit() and withdraw() alike -- would underflow-revert here,
+        // permanently trapping even this "exit for zero" path).
+        vm.prank(lender);
+        uint256 redeemed = freshVault.withdraw(lenderShares);
+        assertEq(redeemed, 0, "the lender's stake was genuinely wiped out by this badDebt, not reverted away");
+        assertEq(freshVault.totalLenderShares(), 0);
+
+        // And the vault is usable again afterward: a fresh lender depositing
+        // into what is now, once again, a pristine (zero-shares) vault mints
+        // 1:1, same as any brand-new vault.
+        address lender2 = address(0xBEEF2);
+        borrowToken.mint(lender2, 50e6);
+        vm.startPrank(lender2);
+        borrowToken.approve(address(freshVault), 50e6);
+        uint256 lender2Shares = freshVault.deposit(50e6);
+        vm.stopPrank();
+        assertEq(lender2Shares, 50e6);
+        // idleAfter wei of idle balance is still there, but it's already
+        // fully claimed by the (unchanged) realized protocolReserves --
+        // only lender2's fresh 50e6 backs lender2's own shares.
+        assertEq(freshVault.totalAssets(), 50e6);
+    }
+
+    /// @notice A bad-debt write-off small enough that it never pushes
+    /// `protocolReserves` above the vault's remaining backing must leave
+    /// `protocolReserves` completely untouched -- the clamp in `liquidate()`
+    /// must be a no-op whenever the invariant was never actually at risk,
+    /// not a blanket haircut on every bad-debt event regardless of size.
+    function test_liquidate_partialBadDebt_leavesReservesUntouched_whenInvariantNeverAtRisk() public {
+        QieForgeVault freshVault = _newVaultWithReserveFactor();
+
+        address lender = address(0x1E4DE2);
+        borrowToken.mint(lender, 10_000e6);
+        vm.startPrank(lender);
+        borrowToken.approve(address(freshVault), 10_000e6);
+        freshVault.deposit(10_000e6); // plenty of idle liquidity left over after the borrow below
+        vm.stopPrank();
+
+        vm.startPrank(borrower);
+        collateral.approve(address(freshVault), type(uint256).max);
+        freshVault.depositCollateral(1_000e18);
+        freshVault.borrow(700e6);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 365 days);
+
+        // A mild crash: deep enough to be liquidatable and even trigger a
+        // real (small) badDebt write-off on this one position, but nowhere
+        // near enough to threaten the vault's overall backing given the
+        // 10,000e6 of untouched idle liquidity sitting from the lender.
+        // Also refresh borrowFeed's timestamp (same price) since the
+        // 365-day warp above pushed both feeds past the oracle's 1-day
+        // maxStaleness.
+        collateralFeed.setAnswer(60_000_000); // $0.60
+        borrowFeed.setAnswer(1_00_000_000); // still $1.00, just un-stale
+        assertLt(freshVault.healthFactor(borrower), 1e18);
+
+        uint256 debtBefore = freshVault.currentDebt(borrower);
+        vm.startPrank(liquidator);
+        borrowToken.approve(address(freshVault), debtBefore);
+        freshVault.liquidate(borrower, debtBefore);
+        vm.stopPrank();
+
+        assertGt(freshVault.protocolReserves(), 0, "sanity: some reserves were realized");
+        assertLe(
+            freshVault.protocolReserves(),
+            freshVault.totalDebtPrincipal() + borrowToken.balanceOf(address(freshVault)),
+            "invariant must hold regardless"
+        );
+        // The real assertion: with ample idle liquidity, the clamp never
+        // engages, so reserves reflect only the real reserve-factor cut of
+        // interest actually realized -- no haircut applied.
+        assertEq(
+            freshVault.totalAssets(),
+            freshVault.totalDebtPrincipal() + borrowToken.balanceOf(address(freshVault)) - freshVault.protocolReserves()
+        );
+    }
 }

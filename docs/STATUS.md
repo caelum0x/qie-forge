@@ -7,6 +7,112 @@ you can re-run, and most have a live URL you can open right now.
 live testnet/mainnet block numbers and real QIE Oracle prices on every
 request — see "Built and verified: frontend" below).
 
+## 2026-10-29 (newest): bad-debt write-off vs. realized protocol reserves — a real insolvency/DoS gap, distinct from the borrow-cap work below
+
+Task scope this pass: one more real, substantial DeFi gap, distinct from
+every fix below. Read this file, `plans/qie-hackathon.md`, and the
+contracts directly first, same as every prior pass.
+
+**Real gap found by reading `QieForgeVault.liquidate()`'s bad-debt branch
+against `protocolReserves`'s own accounting**: a bad-debt write-off
+shrinks `totalDebtPrincipal` (the vault's real backing) by the full
+written-off amount, but never touched the separate, already-*realized*
+`protocolReserves` bucket (interest the treasury's cut has already been
+folded into via a real `_accrue` touch, tracked independently of
+`totalDebtPrincipal`). With a real nonzero `reserveFactorBps` — every real
+deploy of this vault uses one, see `DeployVault.s.sol`'s
+`DEFAULT_RESERVE_FACTOR_BPS` — a position whose *entire* debt gets written
+off as bad debt (the exact scenario `test_liquidation_
+cannotSeizeMoreThanAvailableCollateral` already exercises for a smaller
+case) can leave `protocolReserves` larger than `totalDebtPrincipal + the
+vault's idle borrowAsset balance` combined — the vault's only two sources
+of real backing. `totalAssets()` computes `idle + debt - totalReserves()`;
+once `totalReserves()` exceeds `idle + debt`, that subtraction underflows
+and reverts with a `Panic(0x11)` on *every single future call* —
+including every lender's `deposit()` and `withdraw()` — permanently
+freezing all lender funds in the vault, forever, since `withdrawReserves()`
+itself needs idle liquidity that may never arrive once the vault is
+bricked this way. Confirmed via `git stash` against this repo's own
+pre-fix bytecode: the exact scenario below (full write-off after a real
+year of 10%-reserve-factor interest accrual) genuinely left `vm.
+expectRevert()` passing on `totalAssets()` — a real, reproducible
+Panic(0x11), not a hypothetical.
+
+**Built**: `liquidate()` now clamps `protocolReserves` down to
+`totalDebtPrincipal + borrowAsset.balanceOf(address(this))` (the vault's
+actual post-write-off backing) the moment a bad-debt write-off would
+otherwise push it above that, emitting a new `ProtocolReservesWrittenOff`
+event with the haircut amount. The clamp is a no-op whenever the
+invariant was never actually at risk (ample idle liquidity, or a badDebt
+small enough that lenders' own cushion absorbs it first) — lenders still
+correctly bear bad debt first, exactly as the pre-existing design already
+documents ("shrinking `totalDebtPrincipal` shrinks every share's claim
+proportionally"); the clamp only ever takes the *excess* beyond lenders'
+full wipeout out of already-realized treasury revenue, never the other
+way around.
+
+**Verified two ways, both real**:
+1. `forge test`: 2 new regression tests —
+   `test_liquidate_fullBadDebtWriteOff_doesNotBrickTotalAssets` (a lender
+   deposits exactly what a borrower then fully borrows out, a real year of
+   ~5% APR / 10% reserve-factor interest accrues, the collateral price is
+   crashed to $0.00000001, and the entire position is liquidated as a full
+   write-off: `protocolReserves` lands exactly clamped to the vault's
+   remaining backing, `totalAssets()` returns `0` instead of
+   underflow-reverting, the wiped-out lender's own `withdraw()` succeeds
+   for `0` instead of reverting, and a brand-new lender can `deposit()`
+   into the now-pristine vault afterward) and
+   `test_liquidate_partialBadDebt_leavesReservesUntouched_whenInvariantNeverAtRisk`
+   (a milder crash with ample untouched idle liquidity from the lender: the
+   clamp never engages, reserves reflect only the real reserve-factor cut
+   actually realized). **62 → 64/64 pass**, zero regressions on the other
+   62.
+2. **Live, on real deployed bytecode**, two ways — the live public demo's
+   own vault can't exercise this (its `ratePerSecond18` is deliberately
+   `0`, so it never accrues interest or reserves at all; no demo redeploy
+   was needed or done this pass):
+   - A new one-command demo script,
+     `scripts/bad-debt-reserve-clamp-demo.sh` (mirroring
+     `borrow-cap-demo.sh`'s existing pattern): spins up a disposable local
+     anvil, deploys a real throwaway `QieForgeVault` (its own fresh
+     WQIE/TUSD/oracle, ~5% APR, a real 10% reserve factor — not the
+     public demo's own 0%-rate vault), reproduces the exact scenario above
+     end-to-end against that deployed bytecode, and exits cleanly (exit
+     code 0, no orphaned anvil process left behind afterward).
+   - The same scenario re-proven against the *persistent* self-hosted
+     chain (`http://130.61.180.42:8647`), on a separate throwaway
+     WQIE/TUSD/oracle/vault stack deployed via `forge create` (so the
+     public demo's own open position was never touched, same posture
+     every prior pass's second verification path used) — real on-chain
+     `liquidate()` tx
+     `0xc4cdb5cb99a1340586eecee63be8d10bf6c673a6613cfead6a4cef3f9adaae08`
+     fully wrote off a 735,000,002-unit debt; `totalDebtPrincipal` landed
+     at `0`, `protocolReserves` clamped to `9` (exactly the vault's
+     remaining idle balance), and `totalAssets()` returned `0` without
+     reverting.
+
+**A second, distinct edge case found live while building the demo — NOT
+fixed this pass, flagged for a future one**: calling `deposit()` directly
+(instead of first letting the wiped-out lender `withdraw()`) while
+`totalAssets() == 0` but `totalLenderShares() > 0` reverts with a genuine
+division-by-zero `Panic(0x12)` in `deposit()`'s exchange-rate branch
+(`shares = (amount * totalLenderShares) / assetsBefore`, with
+`assetsBefore == 0`). This is a real, separately-reachable gap (a vault
+whose existing lenders have all been wiped to exactly zero by bad debt,
+but whose shares haven't been withdrawn yet, can't accept a fresh deposit
+until someone withdraws first) — distinct from the insolvency/DoS gap
+fixed above, which is about `protocolReserves` exceeding backing, not
+about `totalAssets()` legitimately reaching zero. Left out of this pass's
+scope deliberately (one real gap per pass) rather than scope-creeping the
+fix; see `plans/qie-hackathon.md` for the same note.
+
+**Owner-only blocker, unchanged, still the single remaining gate**: a
+funded QIE deployer wallet for the real Testnet/Mainnet broadcast
+(`qie.digital/faucet` is a connect-a-wallet flow for testnet; mainnet
+needs real funded QIE) — both genuine owner/operator steps, unautomatable
+from this environment. Everything up to and including that broadcast
+command is real, tested, and ready, same as every pass before this one.
+
 ## 2026-10-29 (latest): aggregate borrow cap shipped, distinct from the liquidation-curve work below
 
 Real gap found by reading `QieForgeVault.borrow()` itself, after the
@@ -371,9 +477,10 @@ file to `infra-box/caddy/sites/qie-forge-demo-rpc.caddy` and
 cd packages/contracts && forge test -vv
 ```
 
-**62/62 tests pass** across 4 suites (`QieOracleAdapter` 8, `QieForgeRouter`
-8, `QieForgeVault` 39, `QieForgePair` 7) — see the "2026-10-29 (latest):
-aggregate borrow cap" section above for the 5 newest, "2026-10-29 (later):
+**64/64 tests pass** across 4 suites (`QieOracleAdapter` 8, `QieForgeRouter`
+8, `QieForgeVault` 41, `QieForgePair` 7) — see the "2026-10-29 (newest):
+bad-debt write-off vs. realized reserves" section above for the 2 newest,
+"2026-10-29 (latest): aggregate borrow cap" for the 5 before that, "2026-10-29 (later):
 severity-scaled liquidation incentive curve" for the 5 before that, and
 "2026-10-29: protocol reserve factor" for the 6 before that
 (the reserve-factor split, pending-vs-realized accounting, and
