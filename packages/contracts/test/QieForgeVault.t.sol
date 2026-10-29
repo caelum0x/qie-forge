@@ -1304,6 +1304,76 @@ contract QieForgeVaultTest is Test {
         assertEq(freshVault.totalAssets(), 50e6);
     }
 
+    /// @notice The companion case `test_liquidate_fullBadDebtWriteOff_doesNotBrickTotalAssets`
+    /// doesn't cover: a full bad-debt write-off leaves `totalLenderShares`
+    /// nonzero (the wiped-out lender never called `withdraw()`), so the
+    /// vault is in a state the old `deposit()` had no formula for --
+    /// `totalLenderShares > 0` but `assetsBefore == 0`. Before this fix,
+    /// this reverted with a bare division-by-zero panic on every future
+    /// `deposit()` call, forever (a real, permanent DoS on new lending
+    /// liquidity), confirmed live against this repo's own pre-fix bytecode
+    /// before writing the fix. A fresh depositor must be able to mint
+    /// clean 1:1 shares here, and the wiped-out lender's stale shares must
+    /// never be able to dilute or claim against that fresh money.
+    function test_deposit_afterFullBadDebtWipeout_withoutPriorWithdraw_mintsFreshSharesInsteadOfReverting() public {
+        QieForgeVault freshVault = _newVaultWithReserveFactor();
+
+        address lender = address(0x1E4DE2);
+        borrowToken.mint(lender, 700e6);
+        vm.startPrank(lender);
+        borrowToken.approve(address(freshVault), 700e6);
+        freshVault.deposit(700e6);
+        vm.stopPrank();
+
+        vm.startPrank(borrower);
+        collateral.approve(address(freshVault), type(uint256).max);
+        freshVault.depositCollateral(1_000e18);
+        freshVault.borrow(700e6); // fully utilizes the vault: idle == 0
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 365 days);
+        collateralFeed.setAnswer(1); // $0.00000001 -- crash deep enough for a full write-off
+        borrowFeed.setAnswer(1_00_000_000); // still $1.00, just un-stale
+
+        uint256 debtBefore = freshVault.currentDebt(borrower);
+        vm.startPrank(liquidator);
+        borrowToken.approve(address(freshVault), debtBefore);
+        freshVault.liquidate(borrower, debtBefore);
+        vm.stopPrank();
+
+        // Sanity: this really is the undefined state the old formula had
+        // no branch for -- shares outstanding, zero backing, and the
+        // original lender deliberately never withdrew.
+        assertEq(freshVault.totalAssets(), 0);
+        assertGt(freshVault.totalLenderShares(), 0, "sanity: lender's shares were never withdrawn");
+        uint256 epochBefore = freshVault.lenderEpoch();
+
+        // The real fix: a brand-new depositor can mint fresh shares here
+        // instead of every deposit() reverting with Panic(0x12) forever.
+        address lender2 = address(0xBEEF3);
+        borrowToken.mint(lender2, 50e6);
+        vm.startPrank(lender2);
+        borrowToken.approve(address(freshVault), 50e6);
+        uint256 lender2Shares = freshVault.deposit(50e6);
+        vm.stopPrank();
+
+        assertEq(lender2Shares, 50e6, "fresh depositor mints clean 1:1 shares");
+        assertEq(freshVault.lenderShares(lender2), 50e6);
+        assertEq(freshVault.totalLenderShares(), 50e6, "stale share count was retired, not added onto");
+        assertEq(freshVault.totalAssets(), 50e6, "only lender2's own money backs the pool now");
+        assertEq(freshVault.lenderEpoch(), epochBefore + 1, "a new epoch was opened to retire the stale one");
+
+        // The original wiped-out lender's raw balance is still nonzero in
+        // storage, but must read as zero now that their epoch was retired
+        // -- otherwise they could dilute or outright drain lender2's fresh
+        // deposit once the pool has real value in it again.
+        assertEq(freshVault.lenderShares(lender), 0, "stale lender's shares read as zero post-reset");
+
+        vm.prank(lender);
+        vm.expectRevert(QieForgeVault.InsufficientShares.selector);
+        freshVault.withdraw(1);
+    }
+
     /// @notice A bad-debt write-off small enough that it never pushes
     /// `protocolReserves` above the vault's remaining backing must leave
     /// `protocolReserves` completely untouched -- the clamp in `liquidate()`

@@ -7,6 +7,71 @@ you can re-run, and most have a live URL you can open right now.
 live testnet/mainnet block numbers and real QIE Oracle prices on every
 request — see "Built and verified: frontend" below).
 
+## 2026-10-29 (even later): deposit() panic after a full bad-debt wipeout — a real permanent DoS on new lending liquidity
+
+This plan's own previous pass (the bad-debt-write-off-vs-reserves fix
+below) flagged this exact gap and deliberately left it unfixed, one real
+gap per pass. Closed it this pass.
+
+**Real gap, confirmed via `git stash` against this repo's own pre-fix
+bytecode before writing anything**: once a full bad-debt write-off (see
+below) drives `totalAssets()` to exactly `0` while `totalLenderShares()`
+is still nonzero (the wiped-out lender never called `withdraw()`),
+`deposit()`'s exchange-rate formula divides by `assetsBefore == 0` and
+reverts with a bare `Panic(0x12)` — on *every* future `deposit()` call,
+forever, since nothing forces the stale lender to ever withdraw their
+now-worthless shares. New lending liquidity is permanently blocked. A
+throwaway repro test against the real pre-fix contract reproduced exactly
+this: `[FAIL: panic: division or modulo by zero (0x12)]
+test_repro_depositAfterFullWipeout_panicsPreFix()`.
+
+**Fixed with an epoch-stamped share balance, not a silent reset**: added
+`lenderEpoch` (bumped once per full-wipeout reset) and
+`_lenderSharesEpoch[address]`; the public `lenderShares(address)` getter
+(same external signature the frontend already calls) now reads a user's
+raw balance only if it was stamped with the *current* epoch, else `0`.
+`deposit()` gained a third branch — `totalLenderShares > 0 && assetsBefore
+== 0` — that bumps the epoch, resets `totalLenderShares` to `0`, and mints
+the new depositor fresh 1:1 shares. This matters, not just a cosmetic
+"stop reverting" patch: without the epoch stamp, a plain reset would leave
+every prior stale holder's raw balance intact and large enough to pass
+`withdraw()`'s own-balance check once the pool has real value in it
+again — letting old, already-wiped-out lenders dilute or outright drain a
+fresh depositor's money. The epoch stamp closes that off: a stale holder's
+effective balance reads `0` forever after the reset, confirmed below.
+
+**Verified two ways, both real**:
+1. `forge test`: 1 new regression test,
+   `test_deposit_afterFullBadDebtWipeout_withoutPriorWithdraw_mintsFreshSharesInsteadOfReverting`
+   — full setup (lender deposits, borrower borrows the entire idle balance,
+   price crashes, a real `liquidate()` call fully writes off the debt),
+   then asserts a second depositor's `deposit()` succeeds instead of
+   reverting, mints clean 1:1 shares, the stale lender's `lenderShares()`
+   reads `0`, and the stale lender's own `withdraw(1)` reverts
+   `InsufficientShares`. **64 → 65/65 pass**, zero regressions on the
+   other 64.
+2. **Live, on real deployed bytecode** (a fresh throwaway
+   WQIE/TUSD/oracle/vault stack deployed via `forge create` against the
+   persistent self-hosted anvil devnet, `http://130.61.180.42:8647` — the
+   public demo's own vault was never touched, same posture every prior
+   pass used, since its 0%-APR demo position can't reach this state):
+   reproduced the exact state live (`totalAssets()` → `0`,
+   `totalLenderShares()` → `700000000`), then called the real `deposit()`
+   from a second account — it succeeded (`status: 1`), landing exactly on
+   `totalAssets() = 50000000`, `totalLenderShares() = 50000000`,
+   `lenderEpoch: 0 → 1`, `lenderShares(lender2) = 50000000`, and
+   `lenderShares(original stale lender) = 0`. The stale lender's own
+   `withdraw(1)` call against the live contract reverted with the real
+   `InsufficientShares` custom error, confirmed via `cast send`. The live
+   production demo (`qie-forge.vercel.app/api/vault-position`) was
+   re-checked afterward and still reports its own unrelated, unchanged
+   500,000 WQIE / 20,000 TUSD position — this fix didn't require touching
+   the public demo's deployment.
+
+**Commit**: `pending` (this session) — `packages/contracts/src/vault/
+QieForgeVault.sol`, `packages/contracts/test/QieForgeVault.t.sol`,
+`README.md`, `SUBMISSION.md`, `docs/STATUS.md`, `docs/TEAM-PRESENTATION.md`.
+
 ## 2026-10-29 (newest): bad-debt write-off vs. realized protocol reserves — a real insolvency/DoS gap, distinct from the borrow-cap work below
 
 Task scope this pass: one more real, substantial DeFi gap, distinct from
@@ -477,9 +542,11 @@ file to `infra-box/caddy/sites/qie-forge-demo-rpc.caddy` and
 cd packages/contracts && forge test -vv
 ```
 
-**64/64 tests pass** across 4 suites (`QieOracleAdapter` 8, `QieForgeRouter`
-8, `QieForgeVault` 41, `QieForgePair` 7) — see the "2026-10-29 (newest):
-bad-debt write-off vs. realized reserves" section above for the 2 newest,
+**65/65 tests pass** across 4 suites (`QieOracleAdapter` 8, `QieForgeRouter`
+8, `QieForgeVault` 42, `QieForgePair` 7) — see the "2026-10-29 (even later):
+deposit() panic after a full bad-debt wipeout" section above for the
+newest, the "2026-10-29 (newest): bad-debt write-off vs. realized
+reserves" section above for the 2 before that,
 "2026-10-29 (latest): aggregate borrow cap" for the 5 before that, "2026-10-29 (later):
 severity-scaled liquidation incentive curve" for the 5 before that, and
 "2026-10-29: protocol reserve factor" for the 6 before that

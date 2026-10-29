@@ -198,8 +198,36 @@ contract QieForgeVault is ReentrancyGuard {
     /// socialized across all lenders: shrinking `totalDebtPrincipal` shrinks
     /// every share's claim proportionally, with no separate write-off ledger
     /// needed.
-    mapping(address => uint256) public lenderShares;
+    ///
+    /// Raw per-user balances live in `_lenderShares`, stamped with the epoch
+    /// they were recorded in (`_lenderSharesEpoch`). `lenderShares(address)`
+    /// below is the public-facing read: any balance stamped with a stale
+    /// epoch reads as zero. This exists for the case a full bad-debt
+    /// write-off (see `liquidate`) drives `totalAssets()` to exactly zero
+    /// while `totalLenderShares` is still nonzero -- deposit()'s old or 1:1
+    /// pricing formulas are both undefined at that point (an honest
+    /// zero-valued pool), so `deposit()` bumps `lenderEpoch` and resets
+    /// `totalLenderShares` to mint the next depositor fresh 1:1 shares
+    /// instead of reverting with a division-by-zero panic forever. Bumping
+    /// the epoch is what keeps that safe: every pre-existing (now
+    /// zero-value, by definition of `totalAssets() == 0`) holder's balance
+    /// reads as zero against the new epoch, so they can never dilute or
+    /// withdraw against the fresh depositor's real money -- without the
+    /// epoch stamp, their stale raw balance would still be large enough to
+    /// pass `withdraw()`'s own-balance check and (once the pool grows
+    /// again) extract real value nobody re-funded them for.
+    mapping(address => uint256) private _lenderShares;
+    mapping(address => uint256) private _lenderSharesEpoch;
+    uint256 public lenderEpoch;
     uint256 public totalLenderShares;
+
+    /// @notice Effective lender share balance: zero if `user` was last
+    /// recorded in an epoch this vault has since retired via a full
+    /// bad-debt wipeout reset in `deposit()`. See the storage doc comment
+    /// above for why this can't just be a plain mapping getter.
+    function lenderShares(address user) public view returns (uint256) {
+        return _lenderSharesEpoch[user] == lenderEpoch ? _lenderShares[user] : 0;
+    }
 
     event CollateralDeposited(address indexed user, uint256 amount);
     event CollateralWithdrawn(address indexed user, uint256 amount);
@@ -482,12 +510,29 @@ contract QieForgeVault is ReentrancyGuard {
             shares = (amount * MINIMUM_LENDER_SHARES) / assetsBefore;
             if (shares == 0) revert ZeroAmount();
             totalLenderShares = MINIMUM_LENDER_SHARES;
+        } else if (assetsBefore == 0) {
+            // totalLenderShares > 0 but the pool backing them is exactly
+            // zero -- a full bad-debt write-off (see `liquidate`) wiped out
+            // every existing lender's claim already. Neither the pristine
+            // 1:1 formula nor the normal exchange-rate formula above is
+            // defined here (the latter divides by `assetsBefore == 0`,
+            // which used to revert with a bare division-by-zero panic and
+            // permanently block all future deposits). Retire the dead
+            // epoch so every existing (zero-value, by definition) holder's
+            // balance reads as zero going forward, reset the share count,
+            // and mint this depositor fresh 1:1 shares exactly like a
+            // brand-new vault.
+            lenderEpoch += 1;
+            totalLenderShares = 0;
+            shares = amount;
+            if (shares == 0) revert ZeroAmount();
         } else {
             shares = (amount * totalLenderShares) / assetsBefore;
             if (shares == 0) revert ZeroAmount();
         }
 
-        lenderShares[msg.sender] += shares;
+        _lenderShares[msg.sender] = lenderShares(msg.sender) + shares;
+        _lenderSharesEpoch[msg.sender] = lenderEpoch;
         totalLenderShares += shares;
         borrowAsset.safeTransferFrom(msg.sender, address(this), amount);
         emit Deposited(msg.sender, amount, shares);
@@ -498,13 +543,15 @@ contract QieForgeVault is ReentrancyGuard {
     /// currently out on loan isn't withdrawable until repaid).
     function withdraw(uint256 shares) external nonReentrant returns (uint256 amount) {
         if (shares == 0) revert ZeroAmount();
-        if (shares > lenderShares[msg.sender]) revert InsufficientShares();
+        uint256 callerShares = lenderShares(msg.sender);
+        if (shares > callerShares) revert InsufficientShares();
 
         amount = (shares * totalAssets()) / totalLenderShares;
         uint256 idle = borrowAsset.balanceOf(address(this));
         if (amount > idle) revert InsufficientLiquidity();
 
-        lenderShares[msg.sender] -= shares;
+        _lenderShares[msg.sender] = callerShares - shares;
+        _lenderSharesEpoch[msg.sender] = lenderEpoch;
         totalLenderShares -= shares;
         borrowAsset.safeTransfer(msg.sender, amount);
         emit Withdrawn(msg.sender, amount, shares);
