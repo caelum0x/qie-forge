@@ -6,6 +6,11 @@ export interface VaultPoolStats {
   totalAssets: string;
   totalDebtPrincipal: string;
   totalLenderShares: string;
+  /** Protocol's own cut of accrued borrower interest (realized + pending),
+   * withdrawable by `treasury` via `withdrawReserves()` — see
+   * QieForgeVault.sol's `reserveFactorBps`/`totalReserves()`. A real,
+   * nonzero number here is the protocol's live revenue, not a projection. */
+  totalReserves: string;
 }
 
 /**
@@ -29,15 +34,17 @@ export async function getVaultPoolStats(): Promise<VaultPoolStats | undefined> {
 
   try {
     const client = getPublicClient();
-    const [totalLenderShares, totalAssets, totalDebtPrincipal] = await Promise.all([
+    const [totalLenderShares, totalAssets, totalDebtPrincipal, totalReserves] = await Promise.all([
       client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "totalLenderShares" }),
       client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "totalAssets" }),
       client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "totalDebtPrincipal" }),
+      client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "totalReserves" }),
     ]);
     return {
       totalAssets: (totalAssets as bigint).toString(),
       totalDebtPrincipal: (totalDebtPrincipal as bigint).toString(),
       totalLenderShares: (totalLenderShares as bigint).toString(),
+      totalReserves: (totalReserves as bigint).toString(),
     };
   } catch {
     return undefined;

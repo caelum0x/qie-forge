@@ -46,6 +46,25 @@ contract QieForgeVault is ReentrancyGuard {
     /// @notice Simple per-second borrow interest rate, scaled 1e18 (e.g. 5% APR ≈ 5e16 / 365 days).
     uint256 public immutable ratePerSecond18;
 
+    /// @notice Fraction of every unit of accrued borrower interest the
+    /// protocol keeps for itself instead of passing through to lender
+    /// shares (a "reserve factor", same primitive Compound/Aave both
+    /// ship). 1_000 = 10%. Before this, 100% of interest flowed to
+    /// lenders and the protocol had no on-chain revenue mechanism at
+    /// all -- a real gap for a product meant to demonstrate business
+    /// viability to judges, not just working mechanics. Borrowers are
+    /// unaffected: they still owe the exact same `ratePerSecond18`-derived
+    /// interest either way; this only changes how that interest is split
+    /// once it is repaid.
+    uint256 public immutable reserveFactorBps;
+
+    /// @notice Address allowed to withdraw accrued protocol reserves.
+    /// Immutable (no owner-settable treasury) so there is no privileged
+    /// function that can redirect reserves after deployment -- the only
+    /// thing `treasury` can ever do is pull `borrowAsset` already carved
+    /// out for it via `withdrawReserves`.
+    address public immutable treasury;
+
     uint256 private constant BPS_DENOMINATOR = 10_000;
     uint256 private constant WAD = 1e18;
 
@@ -91,6 +110,20 @@ contract QieForgeVault is ReentrancyGuard {
     /// test_totalAssets_includesPendingInterest_fromUntouchedPosition.
     uint256 private debtTimeWeightedSum;
 
+    /// @notice Realized protocol reserves (the treasury's cut of interest
+    /// that has actually been folded into `totalDebtPrincipal` via a real
+    /// `_accrue` touch), denominated in `borrowAsset` units, not yet
+    /// withdrawn by `treasury`. Grows lazily, same timing as
+    /// `totalDebtPrincipal` itself. See `totalReserves()` for the
+    /// interest-inclusive, O(1), *pending*-aware version lender-share
+    /// pricing actually uses -- using this raw value alone in
+    /// `totalAssets()` would reintroduce the exact class of staleness bug
+    /// `debtTimeWeightedSum` was added to close (see git history / this
+    /// repo's `plans/qie-hackathon.md`, 2026-10-29 entry): a position left
+    /// untouched would let lender shares price in 100% of its pending
+    /// interest before any reserve cut was ever realized against it.
+    uint256 public protocolReserves;
+
     /// @notice Lender share accounting (ERC4626-style, internal — not a
     /// transferable ERC-20). Lenders supply `borrowAsset` and receive shares
     /// of `totalAssets() = idle borrowAsset balance + totalDebtPrincipal`.
@@ -113,6 +146,7 @@ contract QieForgeVault is ReentrancyGuard {
     event BadDebtWrittenOff(address indexed user, uint256 amount);
     event Deposited(address indexed lender, uint256 amount, uint256 shares);
     event Withdrawn(address indexed lender, uint256 amount, uint256 shares);
+    event ReservesWithdrawn(address indexed treasury, uint256 amount);
 
     error ZeroAmount();
     error InsufficientCollateral();
@@ -122,6 +156,10 @@ contract QieForgeVault is ReentrancyGuard {
     error NothingToLiquidate();
     error InsufficientShares();
     error InsufficientLiquidity();
+    error NotTreasury();
+    error InvalidReserveFactor();
+    error InsufficientReserves();
+    error ZeroTreasury();
 
     constructor(
         IERC20 _collateralAsset,
@@ -130,8 +168,12 @@ contract QieForgeVault is ReentrancyGuard {
         uint256 _ltvBps,
         uint256 _liquidationThresholdBps,
         uint256 _liquidationBonusBps,
-        uint256 _ratePerSecond18
+        uint256 _ratePerSecond18,
+        address _treasury,
+        uint256 _reserveFactorBps
     ) {
+        if (_reserveFactorBps > BPS_DENOMINATOR) revert InvalidReserveFactor();
+        if (_treasury == address(0)) revert ZeroTreasury();
         collateralAsset = _collateralAsset;
         borrowAsset = _borrowAsset;
         oracle = _oracle;
@@ -139,6 +181,8 @@ contract QieForgeVault is ReentrancyGuard {
         liquidationThresholdBps = _liquidationThresholdBps;
         liquidationBonusBps = _liquidationBonusBps;
         ratePerSecond18 = _ratePerSecond18;
+        treasury = _treasury;
+        reserveFactorBps = _reserveFactorBps;
         collateralDecimals = IERC20Metadata(address(_collateralAsset)).decimals();
         borrowDecimals = IERC20Metadata(address(_borrowAsset)).decimals();
     }
@@ -164,6 +208,9 @@ contract QieForgeVault is ReentrancyGuard {
             if (interest > 0) {
                 totalDebtPrincipal = totalDebtPrincipal - debt + newDebt;
                 pos.debtPrincipal = uint128(newDebt);
+                if (reserveFactorBps > 0) {
+                    protocolReserves += (interest * reserveFactorBps) / BPS_DENOMINATOR;
+                }
             }
             // Move this position's weighted-sum contribution from
             // debt*oldLastAccrual to newDebt*now -- safe (no underflow):
@@ -181,10 +228,33 @@ contract QieForgeVault is ReentrancyGuard {
     /// position, right now, derived from the `debtTimeWeightedSum` identity
     /// in its doc comment above -- no iteration over positions needed.
     function _accruedTotalDebt() internal view returns (uint256) {
+        (uint256 total,) = _accruedTotalDebtAndPendingInterest();
+        return total;
+    }
+
+    /// @dev Same O(1) identity as `_accruedTotalDebt()`, but also returns
+    /// the pending-interest component on its own so `totalReserves()` can
+    /// apply the reserve-factor cut to interest that hasn't been realized
+    /// into `protocolReserves` via a real per-position touch yet, without
+    /// duplicating the `debtTimeWeightedSum` math in two places.
+    function _accruedTotalDebtAndPendingInterest() private view returns (uint256 total, uint256 pendingInterest) {
         uint256 linear = block.timestamp * totalDebtPrincipal;
-        if (linear <= debtTimeWeightedSum) return totalDebtPrincipal;
-        uint256 pendingInterest = (ratePerSecond18 * (linear - debtTimeWeightedSum)) / WAD;
-        return totalDebtPrincipal + pendingInterest;
+        if (linear <= debtTimeWeightedSum) return (totalDebtPrincipal, 0);
+        pendingInterest = (ratePerSecond18 * (linear - debtTimeWeightedSum)) / WAD;
+        total = totalDebtPrincipal + pendingInterest;
+    }
+
+    /// @notice Total protocol reserves right now: realized reserves
+    /// (`protocolReserves`, folded in at the last touch of each position)
+    /// plus the reserve-factor cut of interest that is still pending
+    /// (accrued economically but not yet realized into any position's
+    /// stored `debtPrincipal`). Computed from the same O(1) aggregate
+    /// `_accruedTotalDebtAndPendingInterest()` already derives for
+    /// `totalAssets()`, so this can never drift out of sync with it.
+    function totalReserves() public view returns (uint256) {
+        if (reserveFactorBps == 0) return protocolReserves;
+        (, uint256 pendingInterest) = _accruedTotalDebtAndPendingInterest();
+        return protocolReserves + (pendingInterest * reserveFactorBps) / BPS_DENOMINATOR;
     }
 
     function _usdValue(uint256 amount, uint8 tokenDecimals, uint256 price18) private pure returns (uint256) {
@@ -229,10 +299,36 @@ contract QieForgeVault is ReentrancyGuard {
 
     /// @notice Total value backing all lender shares: the vault's own idle
     /// `borrowAsset` balance (undeployed liquidity) plus all outstanding
-    /// debt principal (interest-inclusive, per `_accrue`), which is the
-    /// claim the vault still has on borrowers.
+    /// debt principal (interest-inclusive, per `_accrue`), minus the
+    /// protocol's own reserve-factor cut of that interest (`totalReserves`)
+    /// -- lenders only ever share in `100% - reserveFactorBps` of accrued
+    /// interest, the rest is the protocol's, same split Compound/Aave both
+    /// use. Borrowers still owe the full `ratePerSecond18`-derived amount
+    /// either way; this only changes how the repaid interest is divided.
     function totalAssets() public view returns (uint256) {
-        return borrowAsset.balanceOf(address(this)) + _accruedTotalDebt();
+        return borrowAsset.balanceOf(address(this)) + _accruedTotalDebt() - totalReserves();
+    }
+
+    // ---------------------------------------------------------------- //
+    // Treasury actions
+    // ---------------------------------------------------------------- //
+
+    /// @notice Treasury pulls out real, realized protocol revenue. Capped
+    /// to `protocolReserves` (never the still-pending, not-yet-realized
+    /// component `totalReserves()` also reports) and to the vault's idle
+    /// balance -- reserves accrue against debt that may still be out on
+    /// loan, same "can't withdraw what isn't idle yet" constraint lenders'
+    /// own `withdraw()` already has.
+    function withdrawReserves(uint256 amount) external nonReentrant {
+        if (msg.sender != treasury) revert NotTreasury();
+        if (amount == 0) revert ZeroAmount();
+        if (amount > protocolReserves) revert InsufficientReserves();
+        uint256 idle = borrowAsset.balanceOf(address(this));
+        if (amount > idle) revert InsufficientLiquidity();
+
+        protocolReserves -= amount;
+        borrowAsset.safeTransfer(treasury, amount);
+        emit ReservesWithdrawn(treasury, amount);
     }
 
     /// @notice Supply `borrowAsset` liquidity and receive shares priced at

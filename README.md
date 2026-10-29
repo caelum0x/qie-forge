@@ -48,7 +48,7 @@ derivation of its formulas).
 - **`QieForgePair`** — constant-product (`x*y=k`) pool, 30bps swap fee compounding into reserves, minimum-liquidity burn-lock, price-cumulative TWAP accumulators, ERC-20 LP shares.
 - **`QieForgeRouter`** — multi-hop swap routing, add/remove liquidity with slippage + deadline protection.
 - **`QieOracleAdapter`** — normalizes QIE's real on-chain price oracles (see below) into an 18-decimal USD price, fails closed if an asset has no configured feed or the price is stale.
-- **`QieForgeVault`** — over-collateralized borrowing against a single collateral asset: deposit, borrow up to an LTV cap, real-time health-factor computation, permissionless liquidation with a liquidation bonus, simple per-second interest accrual.
+- **`QieForgeVault`** — over-collateralized borrowing against a single collateral asset: deposit, borrow up to an LTV cap, real-time health-factor computation, permissionless liquidation with a liquidation bonus, simple per-second interest accrual, lender deposit/withdraw share accounting, and a `reserveFactorBps` protocol revenue cut of borrower interest (withdrawable by an immutable `treasury` address) — a real on-chain revenue mechanism, not just working mechanics, the same primitive Compound/Aave both ship.
 
 ```bash
 cd packages/contracts
@@ -57,11 +57,13 @@ forge build
 forge test -vv
 ```
 
-43/43 tests pass locally against Foundry's EVM (deterministic, no network
+52/52 tests pass locally against Foundry's EVM (deterministic, no network
 dependency), including 3-pool multi-hop routing, exact-output swaps, oracle
 staleness/decimals/rotation edge cases, liquidation edge cases (zero-debt,
-over-repay, partial liquidation, sequential liquidators), and lender
-deposit/withdraw share accounting — see [STATUS.md](docs/STATUS.md) for the
+over-repay, partial liquidation, sequential liquidators), lender
+deposit/withdraw share accounting, and the protocol reserve-factor split
+(realized + pending reserve accounting, treasury-only withdrawal, 0%
+backward-compatible default) — see [STATUS.md](docs/STATUS.md) for the
 actual `forge test` output.
 
 ## The SDK + CLI (`packages/core`, `packages/cli`)
@@ -160,8 +162,8 @@ What it actually does, every step a real on-chain call:
 
 Verified live, twice, same result both runs (2026-10-29):
 `20000 TUSD` debt repaid, `428571.43 WQIE` seized (bonus included),
-borrower health factor `0.98 -> ∞ (no debt)`, final `forge test`: 46/46
-still pass. See `scripts/liquidation-bot-demo.mjs` for the viem-based bot
+borrower health factor `0.98 -> ∞ (no debt)`, final `forge test`: 52/52
+still pass (was 46/46 at the time; see the reserve-factor note below). See `scripts/liquidation-bot-demo.mjs` for the viem-based bot
 logic.
 
 ## Real findings from building this (2026-10-26)
@@ -210,7 +212,8 @@ real open gap.
 - **Built and verified live**: TypeScript, Python, and Rust SDKs + the CLI,
   all against real testnet/mainnet RPCs and the real oracle contracts.
 - **Built and verified locally**: the full AMM + lending vault contract
-  suite (44/44 Foundry tests, including a fix for a real
+  suite (52/52 Foundry tests, including a real protocol reserve-factor
+  (treasury revenue) feature added 2026-10-29, and a fix for a real
   `healthFactor()` staleness bug — see docs/STATUS.md); both the Python and
   Rust SDKs' read/quote logic against a real local deployment of the actual
   contract bytecode (anvil); the frontend's quote/vault-position APIs

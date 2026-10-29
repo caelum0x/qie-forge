@@ -23,6 +23,8 @@ contract QieForgeVaultTest is Test {
     uint256 constant LIQ_BONUS_BPS = 500;
     uint256 constant RATE_PER_SECOND_18 = 1_585_489_599; // ≈ 5% APR
     uint256 constant BPS_DENOMINATOR = 10_000;
+    address constant TREASURY = address(0x7EA5027);
+    uint256 constant ZERO_RESERVE_FACTOR_BPS = 0;
 
     function setUp() public {
         collateral = new MockERC20("Wrapped QIE", "WQIE", 18);
@@ -36,7 +38,15 @@ contract QieForgeVaultTest is Test {
         oracle.setFeed(address(borrowToken), address(borrowFeed));
 
         vault = new QieForgeVault(
-            collateral, borrowToken, oracle, LTV_BPS, LIQ_THRESHOLD_BPS, LIQ_BONUS_BPS, RATE_PER_SECOND_18
+            collateral,
+            borrowToken,
+            oracle,
+            LTV_BPS,
+            LIQ_THRESHOLD_BPS,
+            LIQ_BONUS_BPS,
+            RATE_PER_SECOND_18,
+            TREASURY,
+            ZERO_RESERVE_FACTOR_BPS
         );
 
         collateral.mint(borrower, 10_000e18);
@@ -319,7 +329,15 @@ contract QieForgeVaultTest is Test {
         // fix) must keep minting 1:1 -- the MINIMUM_LENDER_SHARES floor
         // only matters once there is pre-existing value to wall off.
         QieForgeVault freshVault = new QieForgeVault(
-            collateral, borrowToken, oracle, LTV_BPS, LIQ_THRESHOLD_BPS, LIQ_BONUS_BPS, RATE_PER_SECOND_18
+            collateral,
+            borrowToken,
+            oracle,
+            LTV_BPS,
+            LIQ_THRESHOLD_BPS,
+            LIQ_BONUS_BPS,
+            RATE_PER_SECOND_18,
+            TREASURY,
+            ZERO_RESERVE_FACTOR_BPS
         );
         address lender = address(0x1E4DE2);
         borrowToken.mint(lender, 1_000e6);
@@ -377,7 +395,15 @@ contract QieForgeVaultTest is Test {
         // Fresh vault, no donated liquidity — so this lender's shares are
         // the only claim on totalAssets() and should round-trip exactly.
         QieForgeVault freshVault = new QieForgeVault(
-            collateral, borrowToken, oracle, LTV_BPS, LIQ_THRESHOLD_BPS, LIQ_BONUS_BPS, RATE_PER_SECOND_18
+            collateral,
+            borrowToken,
+            oracle,
+            LTV_BPS,
+            LIQ_THRESHOLD_BPS,
+            LIQ_BONUS_BPS,
+            RATE_PER_SECOND_18,
+            TREASURY,
+            ZERO_RESERVE_FACTOR_BPS
         );
         address lender = address(0x1E4DE2);
         borrowToken.mint(lender, 1_000e6);
@@ -397,7 +423,15 @@ contract QieForgeVaultTest is Test {
 
     function test_withdraw_revertsWhenSharesExceedBalance() public {
         QieForgeVault freshVault = new QieForgeVault(
-            collateral, borrowToken, oracle, LTV_BPS, LIQ_THRESHOLD_BPS, LIQ_BONUS_BPS, RATE_PER_SECOND_18
+            collateral,
+            borrowToken,
+            oracle,
+            LTV_BPS,
+            LIQ_THRESHOLD_BPS,
+            LIQ_BONUS_BPS,
+            RATE_PER_SECOND_18,
+            TREASURY,
+            ZERO_RESERVE_FACTOR_BPS
         );
         address lender = address(0x1E4DE2);
         borrowToken.mint(lender, 1_000e6);
@@ -415,7 +449,15 @@ contract QieForgeVaultTest is Test {
         // lender-supplied capital — so a borrow() actually drains the idle
         // balance a lender would try to withdraw against.
         QieForgeVault freshVault = new QieForgeVault(
-            collateral, borrowToken, oracle, LTV_BPS, LIQ_THRESHOLD_BPS, LIQ_BONUS_BPS, RATE_PER_SECOND_18
+            collateral,
+            borrowToken,
+            oracle,
+            LTV_BPS,
+            LIQ_THRESHOLD_BPS,
+            LIQ_BONUS_BPS,
+            RATE_PER_SECOND_18,
+            TREASURY,
+            ZERO_RESERVE_FACTOR_BPS
         );
 
         address lender = address(0x1E4DE2);
@@ -439,7 +481,15 @@ contract QieForgeVaultTest is Test {
 
     function test_deposit_lenderSharesAppreciateFromBorrowerInterest() public {
         QieForgeVault freshVault = new QieForgeVault(
-            collateral, borrowToken, oracle, LTV_BPS, LIQ_THRESHOLD_BPS, LIQ_BONUS_BPS, RATE_PER_SECOND_18
+            collateral,
+            borrowToken,
+            oracle,
+            LTV_BPS,
+            LIQ_THRESHOLD_BPS,
+            LIQ_BONUS_BPS,
+            RATE_PER_SECOND_18,
+            TREASURY,
+            ZERO_RESERVE_FACTOR_BPS
         );
 
         address lender = address(0x1E4DE2);
@@ -482,7 +532,15 @@ contract QieForgeVaultTest is Test {
     /// vault's true value to every depositor/withdrawer in the meantime.
     function test_totalAssets_includesPendingInterest_fromUntouchedPosition() public {
         QieForgeVault freshVault = new QieForgeVault(
-            collateral, borrowToken, oracle, LTV_BPS, LIQ_THRESHOLD_BPS, LIQ_BONUS_BPS, RATE_PER_SECOND_18
+            collateral,
+            borrowToken,
+            oracle,
+            LTV_BPS,
+            LIQ_THRESHOLD_BPS,
+            LIQ_BONUS_BPS,
+            RATE_PER_SECOND_18,
+            TREASURY,
+            ZERO_RESERVE_FACTOR_BPS
         );
 
         address lender = address(0x1E4DE2);
@@ -523,7 +581,15 @@ contract QieForgeVaultTest is Test {
     /// was already supplying capital the whole time.
     function test_deposit_pricedFairly_despiteUntouchedAccruingPosition() public {
         QieForgeVault freshVault = new QieForgeVault(
-            collateral, borrowToken, oracle, LTV_BPS, LIQ_THRESHOLD_BPS, LIQ_BONUS_BPS, RATE_PER_SECOND_18
+            collateral,
+            borrowToken,
+            oracle,
+            LTV_BPS,
+            LIQ_THRESHOLD_BPS,
+            LIQ_BONUS_BPS,
+            RATE_PER_SECOND_18,
+            TREASURY,
+            ZERO_RESERVE_FACTOR_BPS
         );
 
         address lender1 = address(0x1E4DE2);
@@ -572,5 +638,192 @@ contract QieForgeVaultTest is Test {
         assertLe(
             redeemed2, 100e6 + 1, "a same-window depositor must not capture interest that accrued before they deposited"
         );
+    }
+
+    // ---------------------------------------------------------------- //
+    // Reserve factor (protocol revenue capture)
+    // ---------------------------------------------------------------- //
+
+    uint256 constant RESERVE_FACTOR_BPS = 1_000; // 10%
+
+    function _newVaultWithReserveFactor() internal returns (QieForgeVault) {
+        return new QieForgeVault(
+            collateral,
+            borrowToken,
+            oracle,
+            LTV_BPS,
+            LIQ_THRESHOLD_BPS,
+            LIQ_BONUS_BPS,
+            RATE_PER_SECOND_18,
+            TREASURY,
+            RESERVE_FACTOR_BPS
+        );
+    }
+
+    function test_constructor_revertsOnReserveFactorAboveOneHundredPercent() public {
+        vm.expectRevert(QieForgeVault.InvalidReserveFactor.selector);
+        new QieForgeVault(
+            collateral, borrowToken, oracle, LTV_BPS, LIQ_THRESHOLD_BPS, LIQ_BONUS_BPS, RATE_PER_SECOND_18, TREASURY, 10_001
+        );
+    }
+
+    function test_constructor_revertsOnZeroTreasury() public {
+        vm.expectRevert(QieForgeVault.ZeroTreasury.selector);
+        new QieForgeVault(
+            collateral,
+            borrowToken,
+            oracle,
+            LTV_BPS,
+            LIQ_THRESHOLD_BPS,
+            LIQ_BONUS_BPS,
+            RATE_PER_SECOND_18,
+            address(0),
+            ZERO_RESERVE_FACTOR_BPS
+        );
+    }
+
+    /// @notice A real reserveFactorBps=10% must mean lenders only ever earn
+    /// 90% of a borrower's accrued interest -- the other 10% becomes
+    /// withdrawable protocol revenue -- without changing how much the
+    /// borrower actually owes.
+    function test_reserveFactor_splitsInterestBetweenLenderAndTreasury() public {
+        QieForgeVault freshVault = _newVaultWithReserveFactor();
+
+        address lender = address(0x1E4DE2);
+        borrowToken.mint(lender, 1_000e6);
+        vm.startPrank(lender);
+        borrowToken.approve(address(freshVault), 1_000e6);
+        uint256 shares = freshVault.deposit(1_000e6);
+        vm.stopPrank();
+
+        vm.startPrank(borrower);
+        collateral.approve(address(freshVault), type(uint256).max);
+        freshVault.depositCollateral(1_000e18);
+        freshVault.borrow(700e6);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 365 days);
+
+        uint256 owed = freshVault.currentDebt(borrower);
+        uint256 interest = owed - 700e6;
+        assertGt(interest, 0, "sanity: interest accrued");
+
+        vm.startPrank(borrower);
+        borrowToken.mint(borrower, owed);
+        borrowToken.approve(address(freshVault), owed);
+        freshVault.repay(owed); // realizes the accrual -> protocolReserves updates
+        vm.stopPrank();
+
+        // Borrower owed the full, un-skimmed interest -- the split only
+        // affects who the repaid interest ends up belonging to.
+        assertEq(freshVault.protocolReserves(), (interest * RESERVE_FACTOR_BPS) / BPS_DENOMINATOR);
+
+        vm.prank(lender);
+        uint256 amount = freshVault.withdraw(shares);
+        uint256 lenderInterest = amount - 1_000e6;
+        assertApproxEqAbs(
+            lenderInterest,
+            interest - (interest * RESERVE_FACTOR_BPS) / BPS_DENOMINATOR,
+            1,
+            "lender must only receive interest net of the reserve-factor cut"
+        );
+    }
+
+    /// @notice Mirrors test_totalAssets_includesPendingInterest_fromUntouchedPosition
+    /// for the reserve side: totalReserves() must count the protocol's cut
+    /// of interest that is economically accrued but not yet realized into
+    /// `protocolReserves` via a real per-position touch -- otherwise a
+    /// lender depositing during that stale window would be priced as if the
+    /// reserve cut didn't exist yet, re-opening the same windfall
+    /// `debtTimeWeightedSum` was added to close for lenders generally.
+    function test_totalReserves_includesPendingCut_fromUntouchedPosition() public {
+        QieForgeVault freshVault = _newVaultWithReserveFactor();
+
+        address lender = address(0x1E4DE2);
+        borrowToken.mint(lender, 1_000e6);
+        vm.startPrank(lender);
+        borrowToken.approve(address(freshVault), 1_000e6);
+        freshVault.deposit(1_000e6);
+        vm.stopPrank();
+
+        vm.startPrank(borrower);
+        collateral.approve(address(freshVault), type(uint256).max);
+        freshVault.depositCollateral(1_000e18);
+        freshVault.borrow(700e6);
+        vm.stopPrank();
+
+        assertEq(freshVault.protocolReserves(), 0, "no interest has accrued yet");
+        assertEq(freshVault.totalReserves(), 0);
+
+        vm.warp(block.timestamp + 365 days);
+
+        // Position never touched again -- protocolReserves is still 0 (lazy
+        // realization), but totalReserves() must already report the real
+        // pending cut so totalAssets()/deposit()/withdraw() price correctly
+        // without needing anyone to touch the stale position first.
+        assertEq(freshVault.protocolReserves(), 0, "realized reserves stay 0 until a real touch happens");
+        uint256 trueInterest = freshVault.currentDebt(borrower) - 700e6;
+        uint256 expectedPendingReserve = (trueInterest * RESERVE_FACTOR_BPS) / BPS_DENOMINATOR;
+        assertApproxEqRel(
+            freshVault.totalReserves(),
+            expectedPendingReserve,
+            1e9,
+            "totalReserves() must already reflect the pending, not-yet-realized reserve cut"
+        );
+    }
+
+    function test_withdrawReserves_onlyTreasuryCanWithdraw_andOnlyRealizedAmount() public {
+        QieForgeVault freshVault = _newVaultWithReserveFactor();
+
+        address lender = address(0x1E4DE2);
+        borrowToken.mint(lender, 1_000e6);
+        vm.startPrank(lender);
+        borrowToken.approve(address(freshVault), 1_000e6);
+        freshVault.deposit(1_000e6);
+        vm.stopPrank();
+
+        vm.startPrank(borrower);
+        collateral.approve(address(freshVault), type(uint256).max);
+        freshVault.depositCollateral(1_000e18);
+        freshVault.borrow(700e6);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 365 days);
+        uint256 owed = freshVault.currentDebt(borrower);
+        vm.startPrank(borrower);
+        borrowToken.mint(borrower, owed);
+        borrowToken.approve(address(freshVault), owed);
+        freshVault.repay(owed);
+        vm.stopPrank();
+
+        uint256 realized = freshVault.protocolReserves();
+        assertGt(realized, 0, "sanity: real interest was realized into protocolReserves via repay()");
+
+        // Not the treasury -- reverts.
+        vm.prank(borrower);
+        vm.expectRevert(QieForgeVault.NotTreasury.selector);
+        freshVault.withdrawReserves(1);
+
+        // Treasury cannot withdraw more than what's actually realized.
+        vm.prank(TREASURY);
+        vm.expectRevert(QieForgeVault.InsufficientReserves.selector);
+        freshVault.withdrawReserves(realized + 1);
+
+        // Real withdrawal moves exactly `realized` borrowAsset to treasury
+        // and zeroes protocolReserves.
+        uint256 treasuryBalBefore = borrowToken.balanceOf(TREASURY);
+        vm.prank(TREASURY);
+        freshVault.withdrawReserves(realized);
+        assertEq(borrowToken.balanceOf(TREASURY) - treasuryBalBefore, realized);
+        assertEq(freshVault.protocolReserves(), 0);
+    }
+
+    /// @notice A 0% reserve factor (the default used throughout the rest of
+    /// this suite) must be fully backward-compatible: lenders get 100% of
+    /// interest, exactly as before this feature existed.
+    function test_zeroReserveFactor_lendersKeepAllInterest() public view {
+        assertEq(vault.reserveFactorBps(), 0);
+        assertEq(vault.protocolReserves(), 0);
+        assertEq(vault.totalReserves(), 0);
     }
 }

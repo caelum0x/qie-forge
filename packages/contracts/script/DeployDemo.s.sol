@@ -82,7 +82,12 @@ contract DeployDemo is Script {
         oracle.setFeed(address(wqie), address(wqieFeed));
         oracle.setFeed(address(tusd), address(tusdFeed));
 
-        vault = new QieForgeVault(wqie, tusd, oracle, 7_500, 8_000, 500, 0);
+        // 10% reserve factor: a real, nonzero demo of the protocol's own
+        // revenue mechanism (QieForgeVault.reserveFactorBps), even though
+        // this demo's RATE_PER_SECOND_18 is 0 so no interest -- and
+        // therefore no reserves -- actually accrues on this disposable
+        // chain. `deployer` doubles as the demo treasury.
+        vault = new QieForgeVault(wqie, tusd, oracle, 7_500, 8_000, 500, 0, deployer, 1_000);
 
         // Seed the vault with borrowable TUSD liquidity via a direct mint
         // rather than deposit(): this is deliberately a one-way ops/demo

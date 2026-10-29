@@ -60,6 +60,7 @@ contract DeployVault is Script {
     uint256 internal constant DEFAULT_LIQUIDATION_THRESHOLD_BPS = 8_000; // 80%
     uint256 internal constant DEFAULT_LIQUIDATION_BONUS_BPS = 500; // 5%
     uint256 internal constant DEFAULT_RATE_PER_SECOND_18 = 1_585_489_599; // ~5% APR
+    uint256 internal constant DEFAULT_RESERVE_FACTOR_BPS = 1_000; // 10% of interest to protocol treasury
 
     error MissingRequiredAddress(string envVarName);
 
@@ -76,11 +77,18 @@ contract DeployVault is Script {
         address borrowAsset = vm.envOr("QIE_FORGE_VAULT_BORROW_ADDRESS", address(0));
         if (borrowAsset == address(0)) revert MissingRequiredAddress("QIE_FORGE_VAULT_BORROW_ADDRESS");
 
+        // Treasury defaults to the deployer (a real address must exist --
+        // the vault's constructor reverts ZeroTreasury() otherwise) but is
+        // overridable so a real launch can point protocol revenue at a
+        // multisig/DAO address instead of the deployer key.
+        address vaultTreasury = vm.envOr("QIE_FORGE_VAULT_TREASURY_ADDRESS", deployer);
+
         uint256 ltvBps = vm.envOr("QIE_FORGE_VAULT_LTV_BPS", DEFAULT_LTV_BPS);
         uint256 liquidationThresholdBps =
             vm.envOr("QIE_FORGE_VAULT_LIQUIDATION_THRESHOLD_BPS", DEFAULT_LIQUIDATION_THRESHOLD_BPS);
         uint256 liquidationBonusBps = vm.envOr("QIE_FORGE_VAULT_LIQUIDATION_BONUS_BPS", DEFAULT_LIQUIDATION_BONUS_BPS);
         uint256 ratePerSecond18 = vm.envOr("QIE_FORGE_VAULT_RATE_PER_SECOND_18", DEFAULT_RATE_PER_SECOND_18);
+        uint256 reserveFactorBps = vm.envOr("QIE_FORGE_VAULT_RESERVE_FACTOR_BPS", DEFAULT_RESERVE_FACTOR_BPS);
 
         vm.startBroadcast(deployerKey);
         vault = new QieForgeVault(
@@ -90,7 +98,9 @@ contract DeployVault is Script {
             ltvBps,
             liquidationThresholdBps,
             liquidationBonusBps,
-            ratePerSecond18
+            ratePerSecond18,
+            vaultTreasury,
+            reserveFactorBps
         );
         vm.stopBroadcast();
 
@@ -102,6 +112,8 @@ contract DeployVault is Script {
         console.log("  liquidationThresholdBps:", liquidationThresholdBps);
         console.log("  liquidationBonusBps:", liquidationBonusBps);
         console.log("  ratePerSecond18:", ratePerSecond18);
+        console.log("  treasury:", vaultTreasury);
+        console.log("  reserveFactorBps:", reserveFactorBps);
         console.log("Deployer:", deployer);
         console.log("");
         console.log(

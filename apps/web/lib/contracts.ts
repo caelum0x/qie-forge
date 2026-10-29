@@ -250,4 +250,18 @@ export const VAULT_ABI = [
     inputs: [],
     outputs: [{ name: "", type: "address" }],
   },
+  {
+    type: "function",
+    name: "totalReserves",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "reserveFactorBps",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
 ] as const;

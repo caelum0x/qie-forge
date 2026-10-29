@@ -25,11 +25,12 @@ export function VaultPoolStatsBar({
 }) {
   const totalAssets = BigInt(stats.totalAssets);
   const totalDebtPrincipal = BigInt(stats.totalDebtPrincipal);
+  const totalReserves = BigInt(stats.totalReserves);
   const idleLiquidity = totalAssets >= totalDebtPrincipal ? totalAssets - totalDebtPrincipal : 0n;
   const utilizationBps = totalAssets > 0n ? (totalDebtPrincipal * 10000n) / totalAssets : 0n;
 
   return (
-    <div className="card p-5 mb-6 grid grid-cols-2 sm:grid-cols-4 gap-4">
+    <div className="card p-5 mb-6 grid grid-cols-2 sm:grid-cols-5 gap-4">
       <Stat
         icon
         label="Total value locked"
@@ -41,6 +42,10 @@ export function VaultPoolStatsBar({
         value={`${formatUnits(totalDebtPrincipal, borrowDecimals)} ${borrowSymbol}`}
       />
       <Stat label="Utilization" value={`${(Number(utilizationBps) / 100).toFixed(2)}%`} />
+      <Stat
+        label="Protocol reserves"
+        value={`${formatUnits(totalReserves, borrowDecimals)} ${borrowSymbol}`}
+      />
     </div>
   );
 }

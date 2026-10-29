@@ -7,6 +7,70 @@ you can re-run, and most have a live URL you can open right now.
 live testnet/mainnet block numbers and real QIE Oracle prices on every
 request — see "Built and verified: frontend" below).
 
+## 2026-10-29: protocol reserve factor (real on-chain revenue mechanism) shipped
+
+Real gap closed: before this, 100% of borrower interest flowed to lender
+shares and the protocol itself had no revenue mechanism at all — a real
+weak point for the "Business Potential" judging criterion (15% weight),
+not just a cosmetic omission. Added `QieForgeVault.reserveFactorBps`
+(immutable, e.g. 1,000 = 10%) and an immutable `treasury` address: on every
+interest accrual, that fraction of the interest is carved out as
+`protocolReserves` instead of flowing to lender-share pricing, withdrawable
+only by `treasury` via `withdrawReserves()`. Borrowers are unaffected —
+they still owe the exact same interest either way; only its split changes.
+
+The tricky part, done correctly rather than approximated: `totalAssets()`
+(what lender shares are priced against) already derives the vault's
+interest-inclusive debt in O(1) via the `debtTimeWeightedSum` identity
+(closed 2026-10-29, see the entry below) rather than iterating positions.
+Reserves had to use the *same* O(1) aggregate so a lender depositing while
+a large position's interest sits un-accrued can't be mispriced against a
+reserve cut that hasn't been "realized" yet — `totalReserves()` = realized
+`protocolReserves` + the reserve-factor cut of the pending (not-yet-touched)
+aggregate interest, derived from the same identity `_accruedTotalDebt()`
+already computes, so it can never drift out of sync with it.
+
+**Verified two ways:**
+1. `forge test`: 6 new regression tests (constructor validation, the real
+   90%/10% interest split after a real `repay()`, the pending-vs-realized
+   reserve accounting on an untouched position, `withdrawReserves` access
+   control + the realized-amount cap, and 0%-reserve-factor backward
+   compatibility). **46 → 52/52 pass**, zero regressions on the other 46.
+2. **Live, on the real self-hosted demo chain** (`http://130.61.180.42:8647`,
+   not just Foundry's test EVM): deployed a fresh vault via `forge create`
+   with a real 5% APR rate and a 10% reserve factor, a `treasury` distinct
+   from the deployer, borrowed 20,000 TUSD against 500,000 WQIE, advanced
+   the chain 365 real days (`evm_increaseTime`), and read `currentDebt()`
+   directly via `cast call`: debt grew from 20,000,000000 to
+   20,999,999999 (≈1,000 TUSD interest, ≈5% as expected) and
+   `totalReserves()` already reported `99,999,999` (≈10% of that interest)
+   *before* anyone touched the position — proving the pending-aggregate
+   math is correct on-chain, not just in a unit test. Then called the real
+   `repay()`, confirmed `protocolReserves()` realized to `100,000,095`,
+   confirmed a non-treasury account's `withdrawReserves()` call reverted
+   `NotTreasury`, then had the real treasury account withdraw exactly that
+   amount and land it in its TUSD balance.
+
+**Redeployed the live public demo** (`DeployDemo.s.sol` now passes
+`treasury`/`reserveFactorBps` too — 10% reserve factor, deployer as
+treasury) against the same persistent self-hosted anvil devnet behind
+`http://130.61.180.42:8647`, updated the 5 affected
+`NEXT_PUBLIC_QIE_FORGE_*` Vercel env vars (vault/factory/router/collateral/
+borrow addresses all changed since `DeployDemo` redeploys the full stack)
+and ran `vercel --prod`. Re-verified live after redeploy, not just assumed:
+`https://qie-forge.vercel.app/vault` → 200, new vault address rendered,
+"Protocol reserves" stat tile shows real "0 TUSD" (correct — this demo's
+rate is 0% APR, so no interest/reserves accrue on it); `/api/quote` for
+1 WQIE → `139579` TUSD (matches every prior entry in this file exactly);
+`/api/vault-position` returns the same documented 500,000/20,000/2.8x
+position. Added `totalReserves()` to the always-visible `/vault` stats bar
+(`VaultPoolStatsBar.tsx`) so judges see the real revenue number without a
+connected wallet, same posture as the TVL/utilization stats shipped
+2026-10-29 earlier.
+
+`npm test` (33/33), `next build` (clean), `npx eslint .` on `apps/web`
+(clean) all re-run and pass after the frontend change.
+
 ## 2026-10-28: lender vault UI shipped, two real bugs found and fixed on the live demo
 
 Real hardening pass (not a new feature from scratch): used the live site as a
@@ -106,9 +170,10 @@ file to `infra-box/caddy/sites/qie-forge-demo-rpc.caddy` and
 cd packages/contracts && forge test -vv
 ```
 
-**43/43 tests pass** across 4 suites (`QieOracleAdapter` 8, `QieForgeRouter`
-8, `QieForgeVault` 20, `QieForgePair` 7) — see "2026-10-28" section above
-for the two newest (the real donation/inflation-attack regression tests).
+**52/52 tests pass** across 4 suites (`QieOracleAdapter` 8, `QieForgeRouter`
+8, `QieForgeVault` 29, `QieForgePair` 7) — see the "2026-10-29: protocol
+reserve factor" section above for the 6 newest (the reserve-factor split,
+pending-vs-realized accounting, and `withdrawReserves` access control).
 Beyond the original 25 (constant-
 product invariants, LP math, fee accrual/protocol-fee switch, TWAP,
 slippage/deadline checks, oracle staleness/decimals handling, base
