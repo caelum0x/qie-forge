@@ -7,7 +7,7 @@ function short(address: string): string {
   return `${address.slice(0, 6)}…${address.slice(-4)}`;
 }
 
-export function WalletConnectButton({ chainId }: { chainId: number }) {
+export function WalletConnectButton() {
   const { address, connecting, error, connect } = useWallet();
 
   if (address) {
@@ -22,7 +22,7 @@ export function WalletConnectButton({ chainId }: { chainId: number }) {
   return (
     <div className="flex flex-col items-end gap-1">
       <button
-        onClick={() => connect(chainId)}
+        onClick={() => connect()}
         disabled={connecting}
         className="btn-primary inline-flex items-center gap-2 px-4 py-2 text-sm"
       >

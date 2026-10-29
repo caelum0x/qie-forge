@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import { encodeFunctionData, parseUnits, formatUnits } from "viem";
 import { useWallet } from "./WalletProvider";
 import { ROUTER_ABI } from "@/lib/contracts";
-import { getNetworkConfig } from "@/lib/config";
 import { ensureAllowance, sendContractCall } from "@/lib/erc20Actions";
 import { SwapIcon } from "./icons";
 
@@ -16,7 +15,6 @@ interface Token {
 
 export function SwapCard({ tokens, routerAddress }: { tokens: Token[]; routerAddress: `0x${string}` }) {
   const { provider, address, connect } = useWallet();
-  const chainId = getNetworkConfig().chainId;
   const [tokenInSymbol, setTokenInSymbol] = useState(tokens[0]?.symbol);
   const [tokenOutSymbol, setTokenOutSymbol] = useState(tokens[1]?.symbol ?? tokens[0]?.symbol);
   const [amountIn, setAmountIn] = useState("");
@@ -116,7 +114,7 @@ export function SwapCard({ tokens, routerAddress }: { tokens: Token[]; routerAdd
       {quoting && <p className="mt-2 text-xs text-muted">Fetching live quote…</p>}
 
       <button
-        onClick={() => (address ? handleSwap() : connect(chainId))}
+        onClick={() => (address ? handleSwap() : connect())}
         disabled={Boolean(address) && (!quote || !amountInBase)}
         className="btn-primary w-full mt-4 py-2.5 text-sm"
       >

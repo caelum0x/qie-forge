@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { encodeFunctionData, formatEther, formatUnits, parseUnits } from "viem";
 import { useWallet } from "./WalletProvider";
-import { getNetworkConfig } from "@/lib/config";
 import { VAULT_ABI } from "@/lib/contracts";
 import { ensureAllowance, sendContractCall } from "@/lib/erc20Actions";
 import { ShieldIcon } from "./icons";
@@ -47,7 +46,6 @@ export function VaultCard({
   borrowSymbol?: string;
 }) {
   const { provider, address, connect } = useWallet();
-  const chainId = getNetworkConfig().chainId;
   const [position, setPosition] = useState<Position | undefined>(undefined);
   const [depositAmount, setDepositAmount] = useState("");
   const [withdrawAmount, setWithdrawAmount] = useState("");
@@ -149,7 +147,7 @@ export function VaultCard({
       </div>
 
       {!address ? (
-        <button onClick={() => connect(chainId)} className="btn-primary w-full py-2.5 text-sm">
+        <button onClick={() => connect()} className="btn-primary w-full py-2.5 text-sm">
           Connect Wallet
         </button>
       ) : (

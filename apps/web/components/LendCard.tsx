@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { encodeFunctionData, formatUnits, parseUnits } from "viem";
 import { useWallet } from "./WalletProvider";
-import { getNetworkConfig } from "@/lib/config";
 import { VAULT_ABI } from "@/lib/contracts";
 import { ensureAllowance, sendContractCall } from "@/lib/erc20Actions";
 import { CoinsIcon } from "./icons";
@@ -33,7 +32,6 @@ export function LendCard({
   borrowSymbol?: string;
 }) {
   const { provider, address, connect } = useWallet();
-  const chainId = getNetworkConfig().chainId;
   const [stats, setStats] = useState<PoolStats | undefined>(undefined);
   const [supplyAmount, setSupplyAmount] = useState("");
   const [withdrawShares, setWithdrawShares] = useState("");
@@ -109,7 +107,7 @@ export function LendCard({
       </div>
 
       {!address ? (
-        <button onClick={() => connect(chainId)} className="btn-primary w-full py-2.5 text-sm">
+        <button onClick={() => connect()} className="btn-primary w-full py-2.5 text-sm">
           Connect Wallet
         </button>
       ) : (

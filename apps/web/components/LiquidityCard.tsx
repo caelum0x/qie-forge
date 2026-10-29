@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { encodeFunctionData, formatUnits, parseUnits } from "viem";
 import { useWallet } from "./WalletProvider";
-import { getNetworkConfig } from "@/lib/config";
 import { ROUTER_ABI } from "@/lib/contracts";
 import { ensureAllowance, sendContractCall } from "@/lib/erc20Actions";
 import { DropletIcon } from "./icons";
@@ -42,7 +41,6 @@ export function LiquidityCard({
   routerAddress: `0x${string}`;
 }) {
   const { provider, address, connect } = useWallet();
-  const chainId = getNetworkConfig().chainId;
   const [position, setPosition] = useState<PoolPosition | undefined>(undefined);
   const [amountA, setAmountA] = useState("");
   const [amountB, setAmountB] = useState("");
@@ -170,7 +168,7 @@ export function LiquidityCard({
       </div>
 
       {!address ? (
-        <button onClick={() => connect(chainId)} className="btn-primary w-full py-2.5 text-sm">
+        <button onClick={() => connect()} className="btn-primary w-full py-2.5 text-sm">
           Connect Wallet
         </button>
       ) : (

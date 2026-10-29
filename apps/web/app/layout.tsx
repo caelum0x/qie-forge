@@ -48,7 +48,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
               </div>
               <div className="flex items-center gap-3">
                 <span className="hidden sm:inline text-xs text-muted uppercase tracking-wide">{network.name}</span>
-                <WalletConnectButton chainId={network.chainId} />
+                <WalletConnectButton />
               </div>
             </nav>
           </header>
