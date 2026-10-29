@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { encodeFunctionData, formatEther, formatUnits, parseUnits } from "viem";
+import { encodeFunctionData, formatUnits, parseUnits } from "viem";
 import { useWallet } from "./WalletProvider";
 import { VAULT_ABI } from "@/lib/contracts";
 import { ensureAllowance, sendContractCall } from "@/lib/erc20Actions";
@@ -153,7 +153,10 @@ export function VaultCard({
       ) : (
         <>
           <div className="grid grid-cols-2 gap-3 mb-4">
-            <Stat label="Collateral" value={position ? formatEther(BigInt(position.collateral)) : "—"} />
+            <Stat
+              label="Collateral"
+              value={position ? formatUnits(BigInt(position.collateral), collateralDecimals) : "—"}
+            />
             <Stat
               label="Debt"
               value={position ? formatUnits(BigInt(position.currentDebt), borrowDecimals) : "—"}
