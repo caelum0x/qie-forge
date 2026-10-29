@@ -80,8 +80,9 @@ documented honestly either way, not just when we found something.
 
 ## Technical highlight 3 — verified, not just tested
 
-- **43/43 Foundry tests** across the full contract suite.
-- **33/33 TypeScript, 23/23 Python, 15/15 Rust tests**, each SDK built
+- **65/65 Foundry tests** across the full contract suite.
+- **53/53 TypeScript (core 23 + CLI 28 + frontend 2), 23/23 Python, 15/15
+  Rust tests**, each SDK built
   independently (not a thin wrapper around the others).
 - **Real anvil-deployment integration tests** in both the Python and Rust
   SDKs: they deploy the actual compiled contract bytecode (not a mock) to a

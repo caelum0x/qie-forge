@@ -84,11 +84,21 @@ Type `10` into the WQIE input. Show the TUSD output field fill in with a real
 computed quote (`1.39573` TUSD at last verification — exact number moves
 slightly as the demo pool accrues fees from other testers, that's expected).
 
-Equivalent API call to show it's a real on-chain read, not client-side math:
+Equivalent API call to show it's a real on-chain read, not client-side math.
+**The WQIE/TUSD token addresses are redeployed (and change) every time the
+demo stack is redeployed** — don't hardcode a past pass's addresses here,
+they will go stale. Grab the current ones straight off the live page before
+recording (`curl -s https://qie-forge.vercel.app/swap | grep -oE
+"0x[a-fA-F0-9]{40}"` — the server-rendered token picker already embeds them,
+no wallet or owner-only step needed):
 
 ```bash
-curl "https://qie-forge.vercel.app/api/quote?amountIn=10000000000000000000&path=0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0&path=0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9"
-# -> {"amounts":["10000000000000000000","1395730"]}
+WQIE=$(curl -s https://qie-forge.vercel.app/swap | grep -oE '0x[a-fA-F0-9]{40}' | sed -n 1p)
+TUSD=$(curl -s https://qie-forge.vercel.app/swap | grep -oE '0x[a-fA-F0-9]{40}' | sed -n 2p)
+curl "https://qie-forge.vercel.app/api/quote?amountIn=10000000000000000000&path=${WQIE}&path=${TUSD}"
+# -> {"amounts":["10000000000000000000","1395730"]} (real output re-verified 2026-10-29
+#    against the live redeployed demo; the raw numbers will differ again after any
+#    future redeploy since reserves/fees move — that's expected, re-run before recording)
 ```
 
 ## 5. Vault — real lending position and health factor (30s)
@@ -101,8 +111,14 @@ health factor 2.8x, all read live from the deployed `QieForgeVault` contract.
 ```bash
 curl "https://qie-forge.vercel.app/api/vault-position?user=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 # -> {"collateral":"500000000000000000000000","debtPrincipal":"20000000000",
-#     "healthFactor":"2800000000000000000","currentDebt":"20000000000"}
+#     "healthFactor":"2800000000000000000","currentDebt":"20000000000", ...
+#     plus pool-level fields (totalAssets, totalDebtPrincipal,
+#     totalLenderShares, liquidationBonusBps) added across later passes}
 ```
+
+(This address is anvil's fixed default account #0 — the same deployer/demo
+borrower on every redeploy — so unlike the swap command above, this one
+command does NOT go stale when the demo stack is redeployed.)
 
 ## 6. Contracts and tests — technical depth (45s)
 
@@ -110,13 +126,16 @@ Terminal:
 
 ```bash
 cd packages/contracts && forge test -vv
-# -> Ran 4 test suites: 41 tests passed, 0 failed, 0 skipped (41 total tests)
+# -> Ran 4 test suites: 65 tests passed, 0 failed, 0 skipped (65 total tests)
 ```
 
-Say: "41 Foundry tests cover constant-product invariants, LP share math, fee
+Say: "65 Foundry tests cover constant-product invariants, LP share math, fee
 accrual, TWAP accumulation, multi-hop routing including 3-pool paths and
-exact-output swaps, oracle staleness/decimals/rotation edge cases, and vault
-liquidation edge cases."
+exact-output swaps, oracle staleness/decimals/rotation edge cases, vault
+liquidation edge cases, the lender-share donation/inflation fix, the
+severity-scaled liquidation bonus curve, the reserve-factor revenue split,
+the aggregate borrow cap, and the bad-debt-vs-protocol-reserves insolvency
+fix."
 
 Show one specific test by name as the security story:
 
@@ -146,7 +165,9 @@ from `demo` to `mainnet` with real addresses is the only change needed."
 
 ```bash
 curl -s https://qie-forge.vercel.app/
-curl -s "https://qie-forge.vercel.app/api/quote?amountIn=10000000000000000000&path=0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0&path=0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9"
+WQIE=$(curl -s https://qie-forge.vercel.app/swap | grep -oE '0x[a-fA-F0-9]{40}' | sed -n 1p)
+TUSD=$(curl -s https://qie-forge.vercel.app/swap | grep -oE '0x[a-fA-F0-9]{40}' | sed -n 2p)
+curl -s "https://qie-forge.vercel.app/api/quote?amountIn=10000000000000000000&path=${WQIE}&path=${TUSD}"
 curl -s "https://qie-forge.vercel.app/api/vault-position?user=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 cd packages/contracts && forge test -vv
 node packages/cli/dist/index.js chain-info --network testnet
