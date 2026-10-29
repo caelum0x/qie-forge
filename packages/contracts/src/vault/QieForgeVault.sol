@@ -72,6 +72,25 @@ contract QieForgeVault is ReentrancyGuard {
     uint256 public totalCollateral;
     uint256 public totalDebtPrincipal;
 
+    /// @notice Sum, over every position with nonzero debt, of
+    /// `debtPrincipal * lastAccrual`. Lets `totalAssets()` compute the
+    /// *exact* interest-inclusive aggregate debt of the whole vault in O(1),
+    /// without iterating every position, via the identity:
+    ///   sum_i debt_i*(1 + rate*(now - lastAccrual_i))
+    ///     = totalDebtPrincipal + rate*(now*totalDebtPrincipal - debtTimeWeightedSum)/WAD
+    /// This closes the same lazy-per-position-accrual blind spot the
+    /// `healthFactor()` fix closed for the per-user display, but for lender
+    /// share pricing: without this, a position that sits untouched accrues
+    /// real interest that `totalAssets()` (and therefore `deposit()`/
+    /// `withdraw()` exchange rates) couldn't see until that specific
+    /// position was next touched -- letting a depositor buy shares while
+    /// that interest was invisible, then force an accrual (e.g. `repay(1)`
+    /// on the stale position) to retroactively capture a slice of interest
+    /// they weren't a lender for, diluting whoever held shares the whole
+    /// time. See `_accruedTotalDebt` and
+    /// test_totalAssets_includesPendingInterest_fromUntouchedPosition.
+    uint256 private debtTimeWeightedSum;
+
     /// @notice Lender share accounting (ERC4626-style, internal — not a
     /// transferable ERC-20). Lenders supply `borrowAsset` and receive shares
     /// of `totalAssets() = idle borrowAsset balance + totalDebtPrincipal`.
@@ -137,16 +156,35 @@ contract QieForgeVault is ReentrancyGuard {
             pos.lastAccrual = uint64(block.timestamp);
             return 0;
         }
-        uint256 elapsed = block.timestamp - pos.lastAccrual;
+        uint256 oldLastAccrual = pos.lastAccrual;
+        uint256 elapsed = block.timestamp - oldLastAccrual;
         if (elapsed > 0) {
             uint256 interest = (debt * ratePerSecond18 * elapsed) / WAD;
+            uint256 newDebt = debt + interest;
             if (interest > 0) {
-                totalDebtPrincipal = totalDebtPrincipal - debt + (debt + interest);
-                debt += interest;
-                pos.debtPrincipal = uint128(debt);
+                totalDebtPrincipal = totalDebtPrincipal - debt + newDebt;
+                pos.debtPrincipal = uint128(newDebt);
             }
+            // Move this position's weighted-sum contribution from
+            // debt*oldLastAccrual to newDebt*now -- safe (no underflow):
+            // debtTimeWeightedSum already contains exactly debt*oldLastAccrual
+            // for this position (invariant maintained by every call site
+            // that changes a position's debtPrincipal, see borrow/repay/
+            // liquidate below).
+            debtTimeWeightedSum = debtTimeWeightedSum - (debt * oldLastAccrual) + (newDebt * block.timestamp);
             pos.lastAccrual = uint64(block.timestamp);
+            debt = newDebt;
         }
+    }
+
+    /// @notice Exact interest-inclusive total outstanding debt across every
+    /// position, right now, derived from the `debtTimeWeightedSum` identity
+    /// in its doc comment above -- no iteration over positions needed.
+    function _accruedTotalDebt() internal view returns (uint256) {
+        uint256 linear = block.timestamp * totalDebtPrincipal;
+        if (linear <= debtTimeWeightedSum) return totalDebtPrincipal;
+        uint256 pendingInterest = (ratePerSecond18 * (linear - debtTimeWeightedSum)) / WAD;
+        return totalDebtPrincipal + pendingInterest;
     }
 
     function _usdValue(uint256 amount, uint8 tokenDecimals, uint256 price18) private pure returns (uint256) {
@@ -194,7 +232,7 @@ contract QieForgeVault is ReentrancyGuard {
     /// debt principal (interest-inclusive, per `_accrue`), which is the
     /// claim the vault still has on borrowers.
     function totalAssets() public view returns (uint256) {
-        return borrowAsset.balanceOf(address(this)) + totalDebtPrincipal;
+        return borrowAsset.balanceOf(address(this)) + _accruedTotalDebt();
     }
 
     /// @notice Supply `borrowAsset` liquidity and receive shares priced at
@@ -302,6 +340,7 @@ contract QieForgeVault is ReentrancyGuard {
         if (collateralValue * ltvBps < newDebtValue * BPS_DENOMINATOR) revert ExceedsLtv();
 
         totalDebtPrincipal = totalDebtPrincipal - debt + newDebt;
+        debtTimeWeightedSum = debtTimeWeightedSum - (debt * block.timestamp) + (newDebt * block.timestamp);
         pos.debtPrincipal = uint128(newDebt);
         borrowAsset.safeTransfer(msg.sender, amount);
         emit Borrowed(msg.sender, amount);
@@ -315,6 +354,7 @@ contract QieForgeVault is ReentrancyGuard {
 
         uint256 newDebt = debt - amount;
         totalDebtPrincipal = totalDebtPrincipal - debt + newDebt;
+        debtTimeWeightedSum = debtTimeWeightedSum - (debt * block.timestamp) + (newDebt * block.timestamp);
         pos.debtPrincipal = uint128(newDebt);
         borrowAsset.safeTransferFrom(msg.sender, address(this), amount);
         emit Repaid(msg.sender, amount);
@@ -358,6 +398,7 @@ contract QieForgeVault is ReentrancyGuard {
 
         uint256 newDebt = debt - repayAmount - badDebt;
         totalDebtPrincipal = totalDebtPrincipal - debt + newDebt;
+        debtTimeWeightedSum = debtTimeWeightedSum - (debt * block.timestamp) + (newDebt * block.timestamp);
         pos.debtPrincipal = uint128(newDebt);
         pos.collateral -= uint128(seizeCollateral);
         totalCollateral -= seizeCollateral;

@@ -470,4 +470,107 @@ contract QieForgeVaultTest is Test {
         uint256 amount = freshVault.withdraw(shares);
         assertGt(amount, 1_000e6, "lender's shares must be worth more than their deposit after interest accrued");
     }
+
+    /// @notice Regression for the lender-pricing blind spot fixed alongside
+    /// this test (same root cause as the healthFactor() staleness fix, but
+    /// for totalAssets()/deposit()/withdraw() instead of the health-factor
+    /// display): without the debtTimeWeightedSum accrual identity,
+    /// totalAssets() == idle balance + totalDebtPrincipal, and
+    /// totalDebtPrincipal only updates when a specific position is touched
+    /// (borrow/repay/liquidate). A big position left untouched accrues real
+    /// interest that totalAssets() couldn't see at all, understating the
+    /// vault's true value to every depositor/withdrawer in the meantime.
+    function test_totalAssets_includesPendingInterest_fromUntouchedPosition() public {
+        QieForgeVault freshVault = new QieForgeVault(
+            collateral, borrowToken, oracle, LTV_BPS, LIQ_THRESHOLD_BPS, LIQ_BONUS_BPS, RATE_PER_SECOND_18
+        );
+
+        address lender = address(0x1E4DE2);
+        borrowToken.mint(lender, 1_000e6);
+        vm.startPrank(lender);
+        borrowToken.approve(address(freshVault), 1_000e6);
+        freshVault.deposit(1_000e6);
+        vm.stopPrank();
+
+        vm.startPrank(borrower);
+        collateral.approve(address(freshVault), type(uint256).max);
+        freshVault.depositCollateral(1_000e18);
+        freshVault.borrow(700e6);
+        vm.stopPrank();
+
+        uint256 idle = borrowToken.balanceOf(address(freshVault));
+        uint256 staleSum = idle + freshVault.totalDebtPrincipal(); // the pre-fix totalAssets() value
+
+        vm.warp(block.timestamp + 180 days);
+
+        uint256 trueDebt = freshVault.currentDebt(borrower); // known-correct, interest-inclusive
+        assertGt(trueDebt, 700e6, "sanity: interest should have accrued");
+
+        uint256 reportedAssets = freshVault.totalAssets();
+        assertGt(
+            reportedAssets, staleSum, "totalAssets() must grow from accrued interest even without touching the position"
+        );
+        assertApproxEqRel(
+            reportedAssets, idle + trueDebt, 1e9, "totalAssets() must match the true interest-inclusive debt"
+        );
+    }
+
+    /// @notice Proves the fix changes real deposit()/withdraw() pricing, not
+    /// just a view getter: a second lender arriving while a large position's
+    /// interest sits un-accrued must be priced against the real,
+    /// interest-inclusive totalAssets() -- not the stale sum -- so they
+    /// cannot ride in on interest that rightfully belongs to the lender who
+    /// was already supplying capital the whole time.
+    function test_deposit_pricedFairly_despiteUntouchedAccruingPosition() public {
+        QieForgeVault freshVault = new QieForgeVault(
+            collateral, borrowToken, oracle, LTV_BPS, LIQ_THRESHOLD_BPS, LIQ_BONUS_BPS, RATE_PER_SECOND_18
+        );
+
+        address lender1 = address(0x1E4DE2);
+        borrowToken.mint(lender1, 1_000e6);
+        vm.startPrank(lender1);
+        borrowToken.approve(address(freshVault), 1_000e6);
+        uint256 shares1 = freshVault.deposit(1_000e6);
+        vm.stopPrank();
+
+        vm.startPrank(borrower);
+        collateral.approve(address(freshVault), type(uint256).max);
+        freshVault.depositCollateral(1_000e18);
+        freshVault.borrow(700e6);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 180 days);
+
+        uint256 staleAssets = borrowToken.balanceOf(address(freshVault)) + freshVault.totalDebtPrincipal();
+
+        address lender2 = address(0xBAD2);
+        borrowToken.mint(lender2, 100e6);
+        vm.startPrank(lender2);
+        borrowToken.approve(address(freshVault), 100e6);
+        uint256 shares2 = freshVault.deposit(100e6);
+        vm.stopPrank();
+
+        // Pre-fix, deposit() priced lender2 off `staleAssets` (minting
+        // amount*totalLenderShares/staleAssets shares -- more shares than
+        // fair, since staleAssets understates the vault's real value).
+        uint256 staleShares = (100e6 * shares1) / staleAssets;
+        assertLt(shares2, staleShares, "post-fix deposit must mint fewer shares than the stale pre-fix pricing would");
+
+        // Force the real accrual now (the borrower repays in full) and
+        // confirm lender2 cannot redeem more than they actually deposited --
+        // the interest that accrued before lender2 arrived must stay with
+        // lender1, not leak to the newcomer.
+        uint256 owed = freshVault.currentDebt(borrower);
+        vm.startPrank(borrower);
+        borrowToken.mint(borrower, owed);
+        borrowToken.approve(address(freshVault), owed);
+        freshVault.repay(owed);
+        vm.stopPrank();
+
+        vm.prank(lender2);
+        uint256 redeemed2 = freshVault.withdraw(shares2);
+        assertLe(
+            redeemed2, 100e6 + 1, "a same-window depositor must not capture interest that accrued before they deposited"
+        );
+    }
 }
