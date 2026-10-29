@@ -48,7 +48,7 @@ derivation of its formulas).
 - **`QieForgePair`** — constant-product (`x*y=k`) pool, 30bps swap fee compounding into reserves, minimum-liquidity burn-lock, price-cumulative TWAP accumulators, ERC-20 LP shares.
 - **`QieForgeRouter`** — multi-hop swap routing, add/remove liquidity with slippage + deadline protection.
 - **`QieOracleAdapter`** — normalizes QIE's real on-chain price oracles (see below) into an 18-decimal USD price, fails closed if an asset has no configured feed or the price is stale.
-- **`QieForgeVault`** — over-collateralized borrowing against a single collateral asset: deposit, borrow up to an LTV cap, real-time health-factor computation, permissionless liquidation with a severity-scaled liquidation bonus (linearly interpolated from `liquidationBonusBps` up to `liquidationBonusMaxBps` the more underwater a position is, not a flat rate — see `liquidationBonusBpsFor`), simple per-second interest accrual, lender deposit/withdraw share accounting, and a `reserveFactorBps` protocol revenue cut of borrower interest (withdrawable by an immutable `treasury` address) — a real on-chain revenue mechanism, not just working mechanics, the same primitives Compound/Aave/Euler each ship.
+- **`QieForgeVault`** — over-collateralized borrowing against a single collateral asset: deposit, borrow up to an LTV cap *and* up to an aggregate `borrowCap` risk ceiling (independent of any one position's own collateralization — see `borrowCap`), real-time health-factor computation, permissionless liquidation with a severity-scaled liquidation bonus (linearly interpolated from `liquidationBonusBps` up to `liquidationBonusMaxBps` the more underwater a position is, not a flat rate — see `liquidationBonusBpsFor`), simple per-second interest accrual, lender deposit/withdraw share accounting, and a `reserveFactorBps` protocol revenue cut of borrower interest (withdrawable by an immutable `treasury` address) — a real on-chain revenue mechanism, not just working mechanics, the same primitives Compound/Aave/Euler each ship.
 
 ```bash
 cd packages/contracts
@@ -57,15 +57,18 @@ forge build
 forge test -vv
 ```
 
-57/57 tests pass locally against Foundry's EVM (deterministic, no network
+62/62 tests pass locally against Foundry's EVM (deterministic, no network
 dependency), including 3-pool multi-hop routing, exact-output swaps, oracle
 staleness/decimals/rotation edge cases, liquidation edge cases (zero-debt,
 over-repay, partial liquidation, sequential liquidators, the severity-scaled
 liquidation-bonus curve's constructor validation/flat-mode-backward-
 compatibility/exact-interpolation-and-clamp-to-max cases), lender
-deposit/withdraw share accounting, and the protocol reserve-factor split
+deposit/withdraw share accounting, the protocol reserve-factor split
 (realized + pending reserve accounting, treasury-only withdrawal, 0%
-backward-compatible default) — see [STATUS.md](docs/STATUS.md) for the
+backward-compatible default), and the aggregate `borrowCap` risk ceiling
+(unlimited-by-default backward compatibility, exact-boundary success/
+revert, aggregate-across-multiple-borrowers, and interest-accrual-never-
+blocked-only-new-draws-are cases) — see [STATUS.md](docs/STATUS.md) for the
 actual `forge test` output.
 
 ## The SDK + CLI (`packages/core`, `packages/cli`)
@@ -174,6 +177,40 @@ same liquidation — borrower health factor `0.98 -> ∞ (no debt)`, final
 before the reserve-factor feature; see the reserve-factor note below).
 See `scripts/liquidation-bot-demo.mjs` for the viem-based bot logic.
 
+### Borrow cap — an aggregate risk ceiling independent of per-position LTV (2026-10-29)
+
+Before this, `ltvBps` was the *only* check on how much a vault could lend
+out in aggregate: a well-collateralized borrower (or several) could grow
+`totalDebtPrincipal` arbitrarily large with nothing else gating it, even
+though real risk management — oracle feed liquidity depth, how much of
+the collateral asset could actually be sold to cover a cluster of
+simultaneous liquidations — bounds how large a single market can safely
+get. Compound's per-market `borrowCaps` and Aave's per-reserve borrow cap
+both exist for exactly this reason. Added an immutable `QieForgeVault.
+borrowCap` (0 = unlimited, the exact pre-existing behavior — every one of
+the 57 pre-existing tests passes unchanged under that default) that
+`borrow()` checks against the vault's aggregate debt, never blocking
+interest accrual on already-outstanding debt, only new `borrow()`
+principal draws (exactly like `ExceedsLtv` only ever gates new draws).
+
+Verified live (2026-10-29) against the real deployed demo bytecode, not
+just Foundry's test EVM: `./scripts/borrow-cap-demo.sh` deploys the exact
+`DeployDemo.s.sol` stack (which now sets a real, nonzero `borrowCap` of
+100,000 TUSD) to a disposable local anvil, deposits extra collateral so
+the cap — not LTV — is the binding constraint, then proves the real
+boundary on-chain: a `borrow()` landing *exactly* on the remaining
+headroom succeeds (`totalDebtPrincipal` becomes exactly `100000000000` =
+100,000 TUSD), and the very next `borrow(1)` (1 unit over) reverts with
+the real `BorrowCapExceeded` custom error, with `totalDebtPrincipal`
+unchanged. Also proven against the persistent self-hosted demo chain
+(`http://130.61.180.42:8647`) on a separate throwaway vault instance (so
+the public demo's own open position was never touched) — same exact
+boundary, real tx `0xc71dd5c403441aeb747dc04a6cf3909c400e0f392047fe8fe762ad4ae77af794`
+for the at-cap success. `forge test`: 57 → 62/62 pass, zero regressions.
+Surfaced on `/vault` too: `VaultPoolStatsBar` now shows a real "Borrow
+cap" stat (`20000 / 100000 TUSD`) alongside TVL/utilization/reserves, no
+wallet connection required.
+
 ## Real findings from building this (2026-10-26)
 
 Everything below came from an actual `eth_call`/`eth_getCode`/HTTP request
@@ -220,10 +257,11 @@ real open gap.
 - **Built and verified live**: TypeScript, Python, and Rust SDKs + the CLI,
   all against real testnet/mainnet RPCs and the real oracle contracts.
 - **Built and verified locally**: the full AMM + lending vault contract
-  suite (57/57 Foundry tests, including a real protocol reserve-factor
-  (treasury revenue) feature and a severity-scaled liquidation-bonus curve,
-  both added 2026-10-29, plus a fix for a real `healthFactor()` staleness
-  bug — see docs/STATUS.md); both the Python and
+  suite (62/62 Foundry tests, including a real protocol reserve-factor
+  (treasury revenue) feature, a severity-scaled liquidation-bonus curve,
+  and an aggregate `borrowCap` risk ceiling independent of per-position
+  LTV, all added 2026-10-29, plus a fix for a real `healthFactor()`
+  staleness bug — see docs/STATUS.md); both the Python and
   Rust SDKs' read/quote logic against a real local deployment of the actual
   contract bytecode (anvil); the frontend's quote/vault-position APIs
   against that same real deployment, now also publicly reachable (see

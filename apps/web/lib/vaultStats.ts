@@ -11,6 +11,10 @@ export interface VaultPoolStats {
    * QieForgeVault.sol's `reserveFactorBps`/`totalReserves()`. A real,
    * nonzero number here is the protocol's live revenue, not a projection. */
   totalReserves: string;
+  /** Aggregate ceiling on `totalDebtPrincipal` new `borrow()` calls may
+   * push the vault to — see QieForgeVault.sol's `borrowCap`. "0" means
+   * unlimited (no cap configured for this vault). */
+  borrowCap: string;
 }
 
 /**
@@ -34,17 +38,19 @@ export async function getVaultPoolStats(): Promise<VaultPoolStats | undefined> {
 
   try {
     const client = getPublicClient();
-    const [totalLenderShares, totalAssets, totalDebtPrincipal, totalReserves] = await Promise.all([
+    const [totalLenderShares, totalAssets, totalDebtPrincipal, totalReserves, borrowCap] = await Promise.all([
       client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "totalLenderShares" }),
       client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "totalAssets" }),
       client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "totalDebtPrincipal" }),
       client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "totalReserves" }),
+      client.readContract({ address: vaultAddress, abi: VAULT_ABI, functionName: "borrowCap" }),
     ]);
     return {
       totalAssets: (totalAssets as bigint).toString(),
       totalDebtPrincipal: (totalDebtPrincipal as bigint).toString(),
       totalLenderShares: (totalLenderShares as bigint).toString(),
       totalReserves: (totalReserves as bigint).toString(),
+      borrowCap: (borrowCap as bigint).toString(),
     };
   } catch {
     return undefined;

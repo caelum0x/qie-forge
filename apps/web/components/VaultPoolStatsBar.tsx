@@ -26,11 +26,16 @@ export function VaultPoolStatsBar({
   const totalAssets = BigInt(stats.totalAssets);
   const totalDebtPrincipal = BigInt(stats.totalDebtPrincipal);
   const totalReserves = BigInt(stats.totalReserves);
+  const borrowCap = BigInt(stats.borrowCap);
   const idleLiquidity = totalAssets >= totalDebtPrincipal ? totalAssets - totalDebtPrincipal : 0n;
   const utilizationBps = totalAssets > 0n ? (totalDebtPrincipal * 10000n) / totalAssets : 0n;
+  // See QieForgeVault.sol's `borrowCap`: 0 means no aggregate ceiling is
+  // configured for this vault, distinct from "0 room left to borrow".
+  const borrowCapValue =
+    borrowCap === 0n ? "Unlimited" : `${formatUnits(totalDebtPrincipal, borrowDecimals)} / ${formatUnits(borrowCap, borrowDecimals)} ${borrowSymbol}`;
 
   return (
-    <div className="card p-5 mb-6 grid grid-cols-2 sm:grid-cols-5 gap-4">
+    <div className="card p-5 mb-6 grid grid-cols-2 sm:grid-cols-6 gap-4">
       <Stat
         icon
         label="Total value locked"
@@ -46,6 +51,7 @@ export function VaultPoolStatsBar({
         label="Protocol reserves"
         value={`${formatUnits(totalReserves, borrowDecimals)} ${borrowSymbol}`}
       />
+      <Stat label="Borrow cap" value={borrowCapValue} />
     </div>
   );
 }

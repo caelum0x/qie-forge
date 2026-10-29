@@ -30,6 +30,13 @@ contract DeployDemo is Script {
     uint256 internal constant VAULT_BORROW_LIQUIDITY = 500_000 * 1e6; // TUSD seeded into the vault
     uint256 internal constant DEMO_COLLATERAL_DEPOSIT = 500_000 ether; // WQIE, ~$70,000 @ $0.14
     uint256 internal constant DEMO_BORROW_AMOUNT = 20_000 * 1e6; // TUSD (~28.6% LTV, well under 75%)
+    // A real, nonzero demo of QieForgeVault.borrowCap: deliberately above
+    // DEMO_BORROW_AMOUNT (so the demo's own open position opens fine) but
+    // well below VAULT_BORROW_LIQUIDITY (so there's real idle liquidity a
+    // second borrower could still try to draw against, and genuinely hit
+    // the cap against) -- see scripts/borrow-cap-demo.sh for the live
+    // proof against this exact deployed bytecode.
+    uint256 internal constant DEMO_BORROW_CAP = 100_000 * 1e6; // TUSD
 
     function run()
         external
@@ -95,8 +102,12 @@ contract DeployDemo is Script {
         // browsing the live site should never see it as "about to be
         // liquidated") -- the curve itself is proven against this exact
         // deployed bytecode on a throwaway position on this same chain,
-        // see scripts/liquidation-curve-demo.mjs.
-        vault = new QieForgeVault(wqie, tusd, oracle, 7_500, 8_000, 500, 2_000, 0, deployer, 1_000);
+        // see docs/STATUS.md's "severity-scaled liquidation incentive
+        // curve" entry for the real `cast call`/`liquidate()` proof (no
+        // standalone script exists for this one, unlike borrowCap below).
+        // Borrow cap: a real, nonzero demo of QieForgeVault.borrowCap
+        // (100,000 TUSD) -- see DEMO_BORROW_CAP's own doc comment.
+        vault = new QieForgeVault(wqie, tusd, oracle, 7_500, 8_000, 500, 2_000, 0, deployer, 1_000, DEMO_BORROW_CAP);
 
         // Seed the vault with borrowable TUSD liquidity via a direct mint
         // rather than deposit(): this is deliberately a one-way ops/demo

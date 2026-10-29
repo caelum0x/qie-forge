@@ -26,6 +26,7 @@ contract QieForgeVaultTest is Test {
     uint256 constant BPS_DENOMINATOR = 10_000;
     address constant TREASURY = address(0x7EA5027);
     uint256 constant ZERO_RESERVE_FACTOR_BPS = 0;
+    uint256 constant ZERO_BORROW_CAP = 0; // unlimited -- exact pre-existing behavior
 
     function setUp() public {
         collateral = new MockERC20("Wrapped QIE", "WQIE", 18);
@@ -48,7 +49,8 @@ contract QieForgeVaultTest is Test {
             LIQ_BONUS_MAX_BPS_FLAT,
             RATE_PER_SECOND_18,
             TREASURY,
-            ZERO_RESERVE_FACTOR_BPS
+            ZERO_RESERVE_FACTOR_BPS,
+            ZERO_BORROW_CAP
         );
 
         collateral.mint(borrower, 10_000e18);
@@ -340,7 +342,8 @@ contract QieForgeVaultTest is Test {
             LIQ_BONUS_MAX_BPS_FLAT,
             RATE_PER_SECOND_18,
             TREASURY,
-            ZERO_RESERVE_FACTOR_BPS
+            ZERO_RESERVE_FACTOR_BPS,
+            ZERO_BORROW_CAP
         );
         address lender = address(0x1E4DE2);
         borrowToken.mint(lender, 1_000e6);
@@ -407,7 +410,8 @@ contract QieForgeVaultTest is Test {
             LIQ_BONUS_MAX_BPS_FLAT,
             RATE_PER_SECOND_18,
             TREASURY,
-            ZERO_RESERVE_FACTOR_BPS
+            ZERO_RESERVE_FACTOR_BPS,
+            ZERO_BORROW_CAP
         );
         address lender = address(0x1E4DE2);
         borrowToken.mint(lender, 1_000e6);
@@ -436,7 +440,8 @@ contract QieForgeVaultTest is Test {
             LIQ_BONUS_MAX_BPS_FLAT,
             RATE_PER_SECOND_18,
             TREASURY,
-            ZERO_RESERVE_FACTOR_BPS
+            ZERO_RESERVE_FACTOR_BPS,
+            ZERO_BORROW_CAP
         );
         address lender = address(0x1E4DE2);
         borrowToken.mint(lender, 1_000e6);
@@ -463,7 +468,8 @@ contract QieForgeVaultTest is Test {
             LIQ_BONUS_MAX_BPS_FLAT,
             RATE_PER_SECOND_18,
             TREASURY,
-            ZERO_RESERVE_FACTOR_BPS
+            ZERO_RESERVE_FACTOR_BPS,
+            ZERO_BORROW_CAP
         );
 
         address lender = address(0x1E4DE2);
@@ -496,7 +502,8 @@ contract QieForgeVaultTest is Test {
             LIQ_BONUS_MAX_BPS_FLAT,
             RATE_PER_SECOND_18,
             TREASURY,
-            ZERO_RESERVE_FACTOR_BPS
+            ZERO_RESERVE_FACTOR_BPS,
+            ZERO_BORROW_CAP
         );
 
         address lender = address(0x1E4DE2);
@@ -548,7 +555,8 @@ contract QieForgeVaultTest is Test {
             LIQ_BONUS_MAX_BPS_FLAT,
             RATE_PER_SECOND_18,
             TREASURY,
-            ZERO_RESERVE_FACTOR_BPS
+            ZERO_RESERVE_FACTOR_BPS,
+            ZERO_BORROW_CAP
         );
 
         address lender = address(0x1E4DE2);
@@ -598,7 +606,8 @@ contract QieForgeVaultTest is Test {
             LIQ_BONUS_MAX_BPS_FLAT,
             RATE_PER_SECOND_18,
             TREASURY,
-            ZERO_RESERVE_FACTOR_BPS
+            ZERO_RESERVE_FACTOR_BPS,
+            ZERO_BORROW_CAP
         );
 
         address lender1 = address(0x1E4DE2);
@@ -666,14 +675,25 @@ contract QieForgeVaultTest is Test {
             LIQ_BONUS_MAX_BPS_FLAT,
             RATE_PER_SECOND_18,
             TREASURY,
-            RESERVE_FACTOR_BPS
+            RESERVE_FACTOR_BPS,
+            ZERO_BORROW_CAP
         );
     }
 
     function test_constructor_revertsOnReserveFactorAboveOneHundredPercent() public {
         vm.expectRevert(QieForgeVault.InvalidReserveFactor.selector);
         new QieForgeVault(
-            collateral, borrowToken, oracle, LTV_BPS, LIQ_THRESHOLD_BPS, LIQ_BONUS_BPS, LIQ_BONUS_MAX_BPS_FLAT, RATE_PER_SECOND_18, TREASURY, 10_001
+            collateral,
+            borrowToken,
+            oracle,
+            LTV_BPS,
+            LIQ_THRESHOLD_BPS,
+            LIQ_BONUS_BPS,
+            LIQ_BONUS_MAX_BPS_FLAT,
+            RATE_PER_SECOND_18,
+            TREASURY,
+            10_001,
+            ZERO_BORROW_CAP
         );
     }
 
@@ -689,7 +709,8 @@ contract QieForgeVaultTest is Test {
             LIQ_BONUS_MAX_BPS_FLAT,
             RATE_PER_SECOND_18,
             address(0),
-            ZERO_RESERVE_FACTOR_BPS
+            ZERO_RESERVE_FACTOR_BPS,
+            ZERO_BORROW_CAP
         );
     }
 
@@ -855,7 +876,8 @@ contract QieForgeVaultTest is Test {
             LIQ_BONUS_MAX_BPS_CURVE,
             RATE_PER_SECOND_18,
             TREASURY,
-            ZERO_RESERVE_FACTOR_BPS
+            ZERO_RESERVE_FACTOR_BPS,
+            ZERO_BORROW_CAP
         );
     }
 
@@ -871,7 +893,8 @@ contract QieForgeVaultTest is Test {
             LIQ_BONUS_BPS - 1, // max below base -- malformed curve
             RATE_PER_SECOND_18,
             TREASURY,
-            ZERO_RESERVE_FACTOR_BPS
+            ZERO_RESERVE_FACTOR_BPS,
+            ZERO_BORROW_CAP
         );
     }
 
@@ -887,7 +910,8 @@ contract QieForgeVaultTest is Test {
             BPS_DENOMINATOR + 1,
             RATE_PER_SECOND_18,
             TREASURY,
-            ZERO_RESERVE_FACTOR_BPS
+            ZERO_RESERVE_FACTOR_BPS,
+            ZERO_BORROW_CAP
         );
     }
 
@@ -981,5 +1005,173 @@ contract QieForgeVaultTest is Test {
         // $100 repaid * 1.20 (max bonus) / $0.30 price = 400 WQIE exactly.
         assertEq(seized, 400e18, "exact closed-form seize amount at the 20% max bonus");
         assertEq(curveVault.currentDebt(borrower), 600e6);
+    }
+
+    // ---------------------------------------------------------------- //
+    // Borrow cap (aggregate risk ceiling, independent of per-position LTV)
+    // ---------------------------------------------------------------- //
+
+    uint256 constant BORROW_CAP = 1_000e6; // 1,000 TUSD, well under what LTV alone would allow across these tests
+
+    function _newVaultWithBorrowCap(uint256 cap) internal returns (QieForgeVault) {
+        return new QieForgeVault(
+            collateral,
+            borrowToken,
+            oracle,
+            LTV_BPS,
+            LIQ_THRESHOLD_BPS,
+            LIQ_BONUS_BPS,
+            LIQ_BONUS_MAX_BPS_FLAT,
+            RATE_PER_SECOND_18,
+            TREASURY,
+            ZERO_RESERVE_FACTOR_BPS,
+            cap
+        );
+    }
+
+    /// @notice `vault` (from setUp) sets borrowCap to `ZERO_BORROW_CAP` --
+    /// the explicit "unlimited" configuration. A borrow far larger than any
+    /// reasonable real-world cap, but still safely within this borrower's
+    /// own LTV, must still succeed -- proves the sentinel genuinely
+    /// disables the feature rather than silently capping at 0.
+    function test_borrowCap_isUnlimited_whenZero() public {
+        vm.startPrank(borrower);
+        vault.depositCollateral(10_000e18);
+        vault.borrow(7_000e6); // 70% of $10,000 collateral value -- far above BORROW_CAP, fine under LTV
+        vm.stopPrank();
+
+        assertEq(vault.currentDebt(borrower), 7_000e6);
+    }
+
+    /// @notice The real gap this feature closes: before it, per-position
+    /// LTV was the *only* check on how much a vault could lend out in
+    /// aggregate -- a single well-collateralized borrower (or several)
+    /// could grow `totalDebtPrincipal` arbitrarily large with nothing else
+    /// gating it, even though real risk management (oracle feed liquidity
+    /// depth, how much of the collateral asset could actually be sold to
+    /// cover a cluster of simultaneous liquidations) bounds how large a
+    /// single market can safely get. A borrow that is comfortably under
+    /// LTV must still revert once it would push the vault's aggregate debt
+    /// past `borrowCap`.
+    function test_borrow_revertsWhenExceedingBorrowCap() public {
+        QieForgeVault capped = _newVaultWithBorrowCap(BORROW_CAP);
+        borrowToken.mint(address(capped), 1_000_000e6);
+
+        vm.startPrank(borrower);
+        collateral.approve(address(capped), type(uint256).max);
+        capped.depositCollateral(10_000e18); // plenty of collateral -- LTV is not the binding constraint here
+        vm.expectRevert(QieForgeVault.BorrowCapExceeded.selector);
+        capped.borrow(BORROW_CAP + 1); // 1 unit over the cap, still far under LTV
+        vm.stopPrank();
+
+        assertEq(capped.currentDebt(borrower), 0, "the reverted borrow must leave no partial debt behind");
+    }
+
+    /// @notice A borrow landing exactly on the cap (not one unit over) must
+    /// succeed -- the check is `>`, not `>=`, so the cap is a true ceiling
+    /// the vault can fully use, not one unit short of it.
+    function test_borrow_succeedsExactlyAtBorrowCap() public {
+        QieForgeVault capped = _newVaultWithBorrowCap(BORROW_CAP);
+        borrowToken.mint(address(capped), 1_000_000e6);
+
+        vm.startPrank(borrower);
+        collateral.approve(address(capped), type(uint256).max);
+        capped.depositCollateral(10_000e18);
+        capped.borrow(BORROW_CAP);
+        vm.stopPrank();
+
+        assertEq(capped.currentDebt(borrower), BORROW_CAP);
+
+        vm.startPrank(borrower);
+        vm.expectRevert(QieForgeVault.BorrowCapExceeded.selector);
+        capped.borrow(1); // even 1 more unit must now revert
+        vm.stopPrank();
+    }
+
+    /// @notice The cap is aggregate across every borrower, not per-position
+    /// -- a second, entirely separate borrower must be blocked by the
+    /// first borrower's draws against the same shared ceiling, even though
+    /// each individually stays well under their own LTV.
+    function test_borrowCap_isAggregateAcrossMultipleBorrowers() public {
+        QieForgeVault capped = _newVaultWithBorrowCap(BORROW_CAP);
+        borrowToken.mint(address(capped), 1_000_000e6);
+
+        address borrower2 = address(0xB0770E72);
+        collateral.mint(borrower2, 10_000e18);
+        vm.prank(borrower2);
+        collateral.approve(address(capped), type(uint256).max);
+
+        vm.startPrank(borrower);
+        collateral.approve(address(capped), type(uint256).max);
+        capped.depositCollateral(10_000e18);
+        capped.borrow(600e6); // under the 1,000e6 cap on its own
+        vm.stopPrank();
+
+        vm.startPrank(borrower2);
+        capped.depositCollateral(10_000e18);
+        vm.expectRevert(QieForgeVault.BorrowCapExceeded.selector);
+        capped.borrow(500e6); // 600 + 500 = 1,100e6 > the shared 1,000e6 cap, even though 500e6 alone is tiny vs. LTV
+        capped.borrow(400e6); // but 600 + 400 = 1,000e6 lands exactly on the cap and must succeed
+        vm.stopPrank();
+
+        assertEq(capped.currentDebt(borrower2), 400e6);
+        assertEq(capped.totalDebtPrincipal(), BORROW_CAP);
+    }
+
+    /// @notice Interest accruing on already-outstanding debt must never be
+    /// blocked by the cap -- only new `borrow()` principal draws are
+    /// gated, exactly like `ExceedsLtv` only ever gates new draws and never
+    /// retroactively reverts interest accrual on a position already over
+    /// threshold. A vault whose accrued (interest-inclusive) debt has
+    /// already grown past the cap purely from interest must still let an
+    /// existing borrower `repay()` and must still let *liquidation*
+    /// proceed -- it must only reject a *new* `borrow()` draw.
+    function test_borrowCap_doesNotBlockInterestAccrual_onlyNewBorrows() public {
+        uint256 ratePerSecond18 = 1e14; // deliberately fast, so interest alone can cross a small cap quickly
+        QieForgeVault capped = new QieForgeVault(
+            collateral,
+            borrowToken,
+            oracle,
+            LTV_BPS,
+            LIQ_THRESHOLD_BPS,
+            LIQ_BONUS_BPS,
+            LIQ_BONUS_MAX_BPS_FLAT,
+            ratePerSecond18,
+            TREASURY,
+            ZERO_RESERVE_FACTOR_BPS,
+            BORROW_CAP
+        );
+        borrowToken.mint(address(capped), 1_000_000e6);
+
+        vm.startPrank(borrower);
+        collateral.approve(address(capped), type(uint256).max);
+        capped.depositCollateral(10_000e18);
+        capped.borrow(BORROW_CAP); // lands exactly on the cap
+        vm.stopPrank();
+
+        // Let real interest accrue past the cap purely from time passing --
+        // no new borrow() call involved. Only 1 hour, well inside the
+        // oracle's 1-day maxStaleness (setUp) -- long enough for this
+        // deliberately fast `ratePerSecond18` to blow past the cap without
+        // also tripping StalePrice, which would mask what this test is
+        // actually proving.
+        vm.warp(block.timestamp + 1 hours);
+        uint256 accruedDebt = capped.currentDebt(borrower);
+        assertGt(accruedDebt, BORROW_CAP, "interest alone must be able to push accrued debt past the cap");
+
+        // A new borrow() draw must still revert now that aggregate debt is
+        // already over the cap.
+        vm.prank(borrower);
+        vm.expectRevert(QieForgeVault.BorrowCapExceeded.selector);
+        capped.borrow(1);
+
+        // But repay() (shrinking debt, not growing it) must never be
+        // gated by the cap at all.
+        borrowToken.mint(borrower, accruedDebt);
+        vm.startPrank(borrower);
+        borrowToken.approve(address(capped), accruedDebt);
+        capped.repay(accruedDebt);
+        vm.stopPrank();
+        assertEq(capped.currentDebt(borrower), 0);
     }
 }

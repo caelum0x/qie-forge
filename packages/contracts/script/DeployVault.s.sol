@@ -62,6 +62,7 @@ contract DeployVault is Script {
     uint256 internal constant DEFAULT_LIQUIDATION_BONUS_MAX_BPS = 2_000; // 20% once deeply underwater (healthFactor <= 0.5)
     uint256 internal constant DEFAULT_RATE_PER_SECOND_18 = 1_585_489_599; // ~5% APR
     uint256 internal constant DEFAULT_RESERVE_FACTOR_BPS = 1_000; // 10% of interest to protocol treasury
+    uint256 internal constant DEFAULT_BORROW_CAP = 0; // unlimited -- real launch must set this deliberately, see QieForgeVault.borrowCap
 
     error MissingRequiredAddress(string envVarName);
 
@@ -92,6 +93,7 @@ contract DeployVault is Script {
             vm.envOr("QIE_FORGE_VAULT_LIQUIDATION_BONUS_MAX_BPS", DEFAULT_LIQUIDATION_BONUS_MAX_BPS);
         uint256 ratePerSecond18 = vm.envOr("QIE_FORGE_VAULT_RATE_PER_SECOND_18", DEFAULT_RATE_PER_SECOND_18);
         uint256 reserveFactorBps = vm.envOr("QIE_FORGE_VAULT_RESERVE_FACTOR_BPS", DEFAULT_RESERVE_FACTOR_BPS);
+        uint256 borrowCap = vm.envOr("QIE_FORGE_VAULT_BORROW_CAP", DEFAULT_BORROW_CAP);
 
         vm.startBroadcast(deployerKey);
         vault = new QieForgeVault(
@@ -104,7 +106,8 @@ contract DeployVault is Script {
             liquidationBonusMaxBps,
             ratePerSecond18,
             vaultTreasury,
-            reserveFactorBps
+            reserveFactorBps,
+            borrowCap
         );
         vm.stopBroadcast();
 
@@ -119,6 +122,7 @@ contract DeployVault is Script {
         console.log("  ratePerSecond18:", ratePerSecond18);
         console.log("  treasury:", vaultTreasury);
         console.log("  reserveFactorBps:", reserveFactorBps);
+        console.log("  borrowCap:", borrowCap, borrowCap == 0 ? "(unlimited)" : "");
         console.log("Deployer:", deployer);
         console.log("");
         console.log(

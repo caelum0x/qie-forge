@@ -85,6 +85,29 @@ contract QieForgeVault is ReentrancyGuard {
     /// out for it via `withdrawReserves`.
     address public immutable treasury;
 
+    /// @notice Ceiling on `totalDebtPrincipal` (aggregate, across every
+    /// borrower in this vault) that new `borrow()` calls may push the
+    /// vault's debt up to. 0 disables the cap entirely (unlimited, the
+    /// exact pre-existing behavior) -- same sentinel-disables-the-feature
+    /// posture `reserveFactorBps == 0` and `liquidationBonusMaxBps ==
+    /// liquidationBonusBps` already use. Before this, a single vault's
+    /// debt could grow without any ceiling as long as each individual
+    /// position stayed under `ltvBps` -- a real gap: per-position LTV says
+    /// nothing about whether the vault as a whole has grown larger than
+    /// this market can safely absorb (oracle feed liquidity depth, how
+    /// much of `collateralAsset` could actually be sold into to cover a
+    /// cluster of simultaneous liquidations, how much idle `borrowAsset`
+    /// lenders have actually supplied vs. what's been lent out). Real money
+    /// markets cap exactly this for exactly this reason -- Compound's
+    /// per-market `borrowCaps`, Aave's per-reserve borrow cap -- both exist
+    /// so risk management can bound a single market's exposure
+    /// independently of any one borrower's own collateralization. Already-
+    /// accrued interest on existing debt is never blocked by this cap (only
+    /// new `borrow()` principal draws are, exactly like `ExceedsLtv` only
+    /// gates new draws, not interest accrual) -- see
+    /// `test_borrow_revertsWhenExceedingBorrowCap`.
+    uint256 public immutable borrowCap;
+
     uint256 private constant BPS_DENOMINATOR = 10_000;
     uint256 private constant WAD = 1e18;
 
@@ -189,6 +212,7 @@ contract QieForgeVault is ReentrancyGuard {
     error InsufficientReserves();
     error ZeroTreasury();
     error InvalidLiquidationBonusCurve();
+    error BorrowCapExceeded();
 
     constructor(
         IERC20 _collateralAsset,
@@ -200,7 +224,8 @@ contract QieForgeVault is ReentrancyGuard {
         uint256 _liquidationBonusMaxBps,
         uint256 _ratePerSecond18,
         address _treasury,
-        uint256 _reserveFactorBps
+        uint256 _reserveFactorBps,
+        uint256 _borrowCap
     ) {
         if (_reserveFactorBps > BPS_DENOMINATOR) revert InvalidReserveFactor();
         if (_treasury == address(0)) revert ZeroTreasury();
@@ -223,6 +248,7 @@ contract QieForgeVault is ReentrancyGuard {
         ratePerSecond18 = _ratePerSecond18;
         treasury = _treasury;
         reserveFactorBps = _reserveFactorBps;
+        borrowCap = _borrowCap;
         collateralDecimals = IERC20Metadata(address(_collateralAsset)).decimals();
         borrowDecimals = IERC20Metadata(address(_borrowAsset)).decimals();
     }
@@ -510,7 +536,15 @@ contract QieForgeVault is ReentrancyGuard {
         uint256 newDebtValue = _usdValue(newDebt, borrowDecimals, oracle.getPriceUsd18(address(borrowAsset)));
         if (collateralValue * ltvBps < newDebtValue * BPS_DENOMINATOR) revert ExceedsLtv();
 
-        totalDebtPrincipal = totalDebtPrincipal - debt + newDebt;
+        uint256 newTotalDebtPrincipal = totalDebtPrincipal - debt + newDebt;
+        // Gate only the new principal this call draws -- interest that
+        // accrues afterward on already-outstanding debt (via `_accrue`
+        // elsewhere) is never blocked by this check, exactly like
+        // `ExceedsLtv` above only ever gates new draws too. `borrowCap == 0`
+        // means unlimited, the exact pre-existing behavior.
+        if (borrowCap > 0 && newTotalDebtPrincipal > borrowCap) revert BorrowCapExceeded();
+
+        totalDebtPrincipal = newTotalDebtPrincipal;
         debtTimeWeightedSum = debtTimeWeightedSum - (debt * block.timestamp) + (newDebt * block.timestamp);
         pos.debtPrincipal = uint128(newDebt);
         borrowAsset.safeTransfer(msg.sender, amount);

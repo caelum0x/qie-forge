@@ -1,4 +1,4 @@
-# QIE Forge — build status (updated 2026-10-28)
+# QIE Forge — build status (updated 2026-10-29)
 
 Honest status. Nothing below is aspirational — every claim has a command
 you can re-run, and most have a live URL you can open right now.
@@ -6,6 +6,113 @@ you can re-run, and most have a live URL you can open right now.
 **Live public app:** https://qie-forge.vercel.app (home page renders real,
 live testnet/mainnet block numbers and real QIE Oracle prices on every
 request — see "Built and verified: frontend" below).
+
+## 2026-10-29 (latest): aggregate borrow cap shipped, distinct from the liquidation-curve work below
+
+Real gap found by reading `QieForgeVault.borrow()` itself, after the
+severity-scaled liquidation curve below: per-position `ltvBps` was the
+*only* check on how much the vault could lend out in aggregate. A single
+well-collateralized borrower (or several) could grow `totalDebtPrincipal`
+arbitrarily large with nothing else gating it, even though per-position
+LTV says nothing about whether the vault *as a whole* has grown larger
+than this market can safely absorb — real risk management (oracle feed
+liquidity depth, how much of the collateral asset could actually be sold
+to cover a cluster of simultaneous liquidations) bounds this
+independently of any one borrower's own collateralization. This is
+exactly the real-world precedent this gap was weighed against: Compound's
+per-market `borrowCaps` mapping and Aave's per-reserve borrow cap both
+exist for this exact reason, independent of each protocol's own
+per-position LTV checks.
+
+**Built**: an immutable `QieForgeVault.borrowCap` (0 disables the cap
+entirely — unlimited, the exact pre-existing behavior, same
+sentinel-disables-the-feature posture `reserveFactorBps == 0` and
+`liquidationBonusMaxBps == liquidationBonusBps` already use). `borrow()`
+now checks the vault's aggregate debt (`totalDebtPrincipal`, recomputed
+the same way the existing LTV check already does) against `borrowCap`
+before accepting a new draw. Only new `borrow()` principal draws are
+gated — interest accruing on already-outstanding debt (via `_accrue`
+elsewhere) is never blocked, exactly like the existing `ExceedsLtv` check
+only ever gates new draws and never retroactively reverts interest
+accrual on a position already over threshold.
+
+**Verified two ways:**
+1. `forge test`: 5 new regression tests — the `ZERO_BORROW_CAP` sentinel
+   genuinely disables the feature (a borrow far larger than any real cap
+   but still safely under LTV still succeeds); a borrow comfortably under
+   LTV still reverts with the real `BorrowCapExceeded` once it would push
+   aggregate debt past a configured cap, leaving no partial debt behind;
+   the exact boundary — landing precisely on the cap succeeds, 1 unit over
+   reverts; the cap is aggregate across *multiple* borrowers sharing the
+   same vault, not per-position (a second borrower is blocked by the
+   first's draws even though individually under their own LTV); and
+   interest accruing on already-outstanding debt can push accrued debt
+   past the cap without reverting anything, while a *new* `borrow()` draw
+   at that point still correctly reverts and `repay()` is never gated at
+   all. **57 → 62/62 pass**, zero regressions on the other 57.
+2. **Live, on the real self-hosted demo chain**
+   (`http://130.61.180.42:8647`, not just Foundry's test EVM), two ways:
+   - A brand-new one-command demo script, `scripts/borrow-cap-demo.sh`
+     (mirroring `liquidation-bot-demo.sh`'s pattern): spins up a
+     disposable local anvil, deploys the real `DeployDemo.s.sol` stack
+     (now setting a real, nonzero 100,000 TUSD `borrowCap`), deposits
+     extra collateral so the cap — not LTV — is the binding constraint,
+     then proves the exact boundary against that real deployed bytecode:
+     a `borrow()` landing exactly on the remaining headroom succeeds
+     (`totalDebtPrincipal` becomes exactly `100000000000`), the very next
+     `borrow(1)` reverts with the real `BorrowCapExceeded` custom error,
+     and `totalDebtPrincipal` stays unchanged by the reverted call. Exits
+     cleanly (exit code 0), no orphaned anvil process left behind.
+   - The same exact boundary re-proven against the *persistent*
+     self-hosted chain, on a separate throwaway vault instance deployed
+     via `forge create` (so the public demo's own open position was never
+     touched, same posture the liquidation-curve work below used): real
+     `borrow()` tx
+     `0xc71dd5c403441aeb747dc04a6cf3909c400e0f392047fe8fe762ad4ae77af794`
+     landed exactly on a 1,000 TUSD cap and succeeded; the next
+     `borrow(1)` reverted with `BorrowCapExceeded`, `totalDebtPrincipal`
+     unchanged.
+
+**Redeployed the live public demo** (`DeployDemo.s.sol` now passes a real
+100,000 TUSD `DEMO_BORROW_CAP`, deliberately above the demo's own 20,000
+TUSD pre-opened position so it opens fine, and well below the 500,000
+TUSD seeded liquidity so there's real headroom a second borrower could
+still draw against and genuinely hit) against the same persistent
+self-hosted anvil devnet (new addresses: Factory
+`0x02b0b4efd909240fcb2eb5fae060dc60d112e3a4`, Router
+`0x638a246f0ec8883ef68280293ffe8cfbabe61b44`, Oracle
+`0x96F3cE39Ad2Bfdcf92C0f6E2c2CAbF83874660fc`, WQIE
+`0x6C2d83262fF84cBaDb3e416D527403135D757892`, TUSD
+`0xFD6F7A6a5c21A3f503EBaE7a473639974379c351`, Vault
+`0xd49a0e9a4cd5979ae36840f542d2d7f02c4817be`), updated the 5 affected
+`NEXT_PUBLIC_QIE_FORGE_*` Vercel env vars via the Vercel CLI (using
+`printf '%s' | vercel env add`, not `echo | vercel env add`, per the
+newline-bug warning in this file's prior entry), and ran `vercel --prod`
+from the repo root (not `apps/web` — a stray `apps/web/.vercel` link from
+this same pass pointed `vercel build` at the wrong install/build command
+and 404'd on the `@qie-forge/core` workspace package; removed, redeployed
+from the root where `vercel.json`'s real monorepo build command lives).
+
+**Re-verified live after redeploy, not assumed**: `/`, `/swap`, `/pool`,
+`/vault` all HTTP 200; `/api/quote` for 1 WQIE → `139579` TUSD (matches
+every prior entry in this file exactly); `/api/vault-position` returns the
+same documented 500,000 WQIE / 20,000 TUSD / 2.8x health-factor position.
+`/vault`'s new "Borrow cap" stat (`VaultPoolStatsBar`, no wallet required)
+renders the real live value: `"20000 / 100000 TUSD"`.
+
+`next build` (clean), `npx eslint .` on `apps/web` (clean) both re-run and
+pass. README.md/SUBMISSION.md/docs/TEAM-PRESENTATION.md updated with the
+real current test count (62/62, up from 57/57) and the new borrow-cap
+story in the Technical Quality judging row.
+
+**Commit**: see git log for this pass's hash, pushed to
+`caelum0x/qie-forge` main.
+
+**Owner-only blocker, unchanged, still the single remaining gate**: a
+funded QIE deployer wallet for the real Testnet/Mainnet broadcast — both
+genuine owner/operator steps, unautomatable from this environment.
+Everything up to and including that broadcast command is real, tested,
+and ready, same as every pass before this one.
 
 ## 2026-10-29 (later): severity-scaled liquidation incentive curve shipped
 
@@ -264,10 +371,11 @@ file to `infra-box/caddy/sites/qie-forge-demo-rpc.caddy` and
 cd packages/contracts && forge test -vv
 ```
 
-**57/57 tests pass** across 4 suites (`QieOracleAdapter` 8, `QieForgeRouter`
-8, `QieForgeVault` 34, `QieForgePair` 7) — see the "2026-10-29 (later):
-severity-scaled liquidation incentive curve" section above for the 5
-newest, and "2026-10-29: protocol reserve factor" for the 6 before that
+**62/62 tests pass** across 4 suites (`QieOracleAdapter` 8, `QieForgeRouter`
+8, `QieForgeVault` 39, `QieForgePair` 7) — see the "2026-10-29 (latest):
+aggregate borrow cap" section above for the 5 newest, "2026-10-29 (later):
+severity-scaled liquidation incentive curve" for the 5 before that, and
+"2026-10-29: protocol reserve factor" for the 6 before that
 (the reserve-factor split, pending-vs-realized accounting, and
 `withdrawReserves` access control). Beyond the original 25 (constant-
 product invariants, LP math, fee accrual/protocol-fee switch, TWAP,
