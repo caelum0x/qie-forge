@@ -9,6 +9,11 @@ const getBalanceMock = vi.fn();
 const getPriceMock = vi.fn();
 const getAddressMock = vi.fn();
 const addressUrlMock = vi.fn();
+const getPositionMock = vi.fn();
+const getLtvBpsMock = vi.fn();
+const getLiquidationThresholdBpsMock = vi.fn();
+const getAmountsOutMock = vi.fn();
+const isLiquidatableMock = vi.fn();
 
 vi.mock("@qie-forge/core", () => {
   class ChainClient {
@@ -31,10 +36,22 @@ vi.mock("@qie-forge/core", () => {
     getAddress = getAddressMock;
     addressUrl = addressUrlMock;
   }
+  class VaultClient {
+    constructor(
+      public chain: unknown,
+      public vaultAddress: string,
+    ) {}
+    getPosition = getPositionMock;
+    getLtvBps = getLtvBpsMock;
+    getLiquidationThresholdBps = getLiquidationThresholdBpsMock;
+  }
   return {
     ChainClient,
     OracleClient,
     ExplorerClient,
+    VaultClient,
+    getAmountsOut: getAmountsOutMock,
+    isLiquidatable: isLiquidatableMock,
     resolveNetwork: (name: string) => ({ name }),
   };
 });
@@ -43,20 +60,21 @@ vi.mock("@qie-forge/core", () => {
 const { run, asNetwork, COMMANDS } = await import("../src/index.js");
 
 describe("asNetwork", () => {
-  it("accepts testnet and mainnet", () => {
+  it("accepts testnet, mainnet, and demo", () => {
     expect(asNetwork("testnet")).toBe("testnet");
     expect(asNetwork("mainnet")).toBe("mainnet");
+    expect(asNetwork("demo")).toBe("demo");
   });
 
   it("rejects anything else with a descriptive error", () => {
-    expect(() => asNetwork("devnet")).toThrowError(/--network must be "testnet" or "mainnet"/);
+    expect(() => asNetwork("devnet")).toThrowError(/--network must be "testnet", "mainnet", or "demo"/);
   });
 });
 
 describe("COMMANDS registry", () => {
-  it("registers exactly the four documented commands", () => {
+  it("registers exactly the six documented commands", () => {
     expect(Object.keys(COMMANDS).sort()).toEqual(
-      ["balance", "chain-info", "explorer-lookup", "oracle-price"].sort(),
+      ["amm-quote", "balance", "chain-info", "explorer-lookup", "oracle-price", "vault-position"].sort(),
     );
   });
 });
@@ -74,6 +92,11 @@ describe("run()", () => {
     getPriceMock.mockReset();
     getAddressMock.mockReset();
     addressUrlMock.mockReset();
+    getPositionMock.mockReset();
+    getLtvBpsMock.mockReset();
+    getLiquidationThresholdBpsMock.mockReset();
+    getAmountsOutMock.mockReset();
+    isLiquidatableMock.mockReset();
   });
 
   afterEach(() => {
@@ -139,7 +162,7 @@ describe("run()", () => {
     await run(["chain-info", "--network", "bogus"]);
     expect(getSnapshotMock).not.toHaveBeenCalled();
     expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('--network must be "testnet" or "mainnet"'),
+      expect.stringContaining('--network must be "testnet", "mainnet", or "demo"'),
     );
     expect(process.exitCode).toBe(1);
   });
@@ -200,5 +223,88 @@ describe("run()", () => {
     await run(["chain-info"]);
     expect(errorSpy).toHaveBeenCalledWith("RPC unreachable");
     expect(process.exitCode).toBe(1);
+  });
+
+  it("vault-position requires --vault and --user", async () => {
+    await run(["vault-position", "--network", "demo"]);
+    expect(getPositionMock).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("--vault"));
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("vault-position reports a position's health factor and liquidatability", async () => {
+    getPositionMock.mockResolvedValue({
+      collateral: 500_000_000_000_000_000_000n,
+      debtPrincipal: 20_000_000_000n,
+      lastAccrual: 1_800_000_000n,
+      healthFactor: 900_000_000_000_000_000n,
+      currentDebt: 20_050_000_000n,
+    });
+    getLtvBpsMock.mockResolvedValue(7_500n);
+    getLiquidationThresholdBpsMock.mockResolvedValue(8_000n);
+    isLiquidatableMock.mockReturnValue(true);
+
+    await run([
+      "vault-position",
+      "--network",
+      "demo",
+      "--vault",
+      "0xvault",
+      "--user",
+      "0xuser",
+    ]);
+
+    expect(getPositionMock).toHaveBeenCalledWith("0xuser");
+    const printed = JSON.parse((logSpy.mock.calls[0]?.[0] as string) ?? "{}");
+    expect(printed).toMatchObject({
+      network: "demo",
+      vault: "0xvault",
+      user: "0xuser",
+      collateral: "500000000000000000000",
+      debtPrincipal: "20000000000",
+      healthFactor: "900000000000000000",
+      ltvBps: "7500",
+      liquidationThresholdBps: "8000",
+      isLiquidatable: true,
+    });
+  });
+
+  it("amm-quote requires --factory, --amount-in, and --path", async () => {
+    await run(["amm-quote", "--network", "demo"]);
+    expect(getAmountsOutMock).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("--factory"));
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("amm-quote parses a comma-separated path and prints the quoted amounts", async () => {
+    getAmountsOutMock.mockResolvedValue([1_000_000_000_000_000_000n, 2_345_000_000n]);
+
+    await run([
+      "amm-quote",
+      "--network",
+      "demo",
+      "--factory",
+      "0xfactory",
+      "--amount-in",
+      "1000000000000000000",
+      "--path",
+      "0xaaa, 0xbbb",
+    ]);
+
+    expect(getAmountsOutMock).toHaveBeenCalledWith(
+      expect.anything(),
+      "0xfactory",
+      1_000_000_000_000_000_000n,
+      ["0xaaa", "0xbbb"],
+    );
+    const printed = JSON.parse((logSpy.mock.calls[0]?.[0] as string) ?? "{}");
+    expect(printed).toEqual({
+      network: "demo",
+      factory: "0xfactory",
+      path: ["0xaaa", "0xbbb"],
+      amountIn: "1000000000000000000",
+      amounts: ["1000000000000000000", "2345000000"],
+      amountOut: "2345000000",
+    });
   });
 });
